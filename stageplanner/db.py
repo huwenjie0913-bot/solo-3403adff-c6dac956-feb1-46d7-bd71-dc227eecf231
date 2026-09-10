@@ -61,6 +61,43 @@ CREATE TABLE IF NOT EXISTS paths (
     actor_id              TEXT NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
     points                TEXT NOT NULL         -- JSON [[x,y],...] 折线锚点
 );
+-- 排练实录：一次排练对应一份不可变编排快照（snapshot 为开排时整文档 JSON）
+CREATE TABLE IF NOT EXISTS rehearsals (
+    id             TEXT PRIMARY KEY,
+    stage_id       TEXT NOT NULL REFERENCES stages(id) ON DELETE CASCADE,
+    scene_id       TEXT,                          -- 快照场景 id（场景删除后保留冗余名称）
+    scene_name     TEXT NOT NULL DEFAULT '',
+    name           TEXT NOT NULL,
+    snapshot       TEXT NOT NULL,                 -- JSON 编排快照（不回写原方案）
+    notes          TEXT NOT NULL DEFAULT '',      -- 排练总备注
+    status         TEXT NOT NULL DEFAULT 'running', -- running | finished
+    origin         REAL NOT NULL DEFAULT 0,       -- 场景时钟原点（首节点计划时间）
+    clock_elapsed  REAL NOT NULL DEFAULT 0,       -- 排练时钟已走秒数
+    clock_running  INTEGER NOT NULL DEFAULT 0,
+    clock_at       TEXT,                          -- 时钟基准（客户端 ISO 时间，刷新后续跑）
+    created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS rehearsal_beat_marks (
+    id            TEXT PRIMARY KEY,
+    rehearsal_id  TEXT NOT NULL REFERENCES rehearsals(id) ON DELETE CASCADE,
+    beat_id       TEXT NOT NULL,
+    actual_time   REAL,                           -- 实测节点时刻（排练时钟秒），NULL=漏记
+    note          TEXT NOT NULL DEFAULT '',
+    UNIQUE(rehearsal_id, beat_id)
+);
+CREATE TABLE IF NOT EXISTS rehearsal_actor_marks (
+    id            TEXT PRIMARY KEY,
+    rehearsal_id  TEXT NOT NULL REFERENCES rehearsals(id) ON DELETE CASCADE,
+    beat_id       TEXT NOT NULL,
+    actor_id      TEXT NOT NULL,
+    actual_time   REAL,                           -- 演员到位打点时刻，NULL=未打点
+    x             REAL,                           -- 实测位置（拖动修正）
+    y             REAL,
+    absent        INTEGER NOT NULL DEFAULT 0,     -- 缺席标记
+    note          TEXT NOT NULL DEFAULT '',       -- 逐条处理备注
+    UNIQUE(rehearsal_id, beat_id, actor_id)
+);
 """
 
 TABLES = ["paths", "placements", "beats", "scenes", "actors", "regions", "stages"]
@@ -216,5 +253,111 @@ def save_document(doc):
                 conn.executemany(sql, [make(r) for r in rows])
                 keep_ids |= ids
         return get_stage(sid)
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------- 排练实录
+def list_rehearsals(stage_id):
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            """SELECT id, stage_id, scene_id, scene_name, name, notes, status,
+                      origin, clock_elapsed, clock_running, clock_at,
+                      created_at, updated_at
+               FROM rehearsals WHERE stage_id=? ORDER BY created_at DESC, rowid DESC""",
+            (stage_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_rehearsal(rehearsal_id):
+    conn = get_conn()
+    try:
+        r = conn.execute("SELECT * FROM rehearsals WHERE id=?", (rehearsal_id,)).fetchone()
+        if not r:
+            return None
+        rec = dict(r)
+        rec["beat_marks"] = [dict(x) for x in conn.execute(
+            "SELECT * FROM rehearsal_beat_marks WHERE rehearsal_id=? ORDER BY rowid",
+            (rehearsal_id,))]
+        rec["actor_marks"] = [dict(x) for x in conn.execute(
+            "SELECT * FROM rehearsal_actor_marks WHERE rehearsal_id=? ORDER BY rowid",
+            (rehearsal_id,))]
+        return rec
+    finally:
+        conn.close()
+
+
+def insert_rehearsal(rec):
+    import json
+    conn = get_conn()
+    try:
+        with transaction(conn):
+            conn.execute(
+                """INSERT INTO rehearsals(id, stage_id, scene_id, scene_name, name,
+                       snapshot, notes, status, origin, clock_elapsed, clock_running,
+                       clock_at, updated_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))""",
+                (rec["id"], rec["stage_id"], rec.get("scene_id"), rec.get("scene_name", ""),
+                 rec["name"], json.dumps(rec["snapshot"], ensure_ascii=False),
+                 rec.get("notes", ""), rec.get("status", "running"),
+                 float(rec.get("origin", 0)), float(rec.get("clock_elapsed", 0)),
+                 1 if rec.get("clock_running") else 0, rec.get("clock_at")),
+            )
+        return get_rehearsal(rec["id"])
+    finally:
+        conn.close()
+
+
+def save_rehearsal(rec):
+    """整份排练 upsert：排练元数据 + 全量打点（以客户端为准）。"""
+    import json
+    conn = get_conn()
+    try:
+        with transaction(conn):
+            conn.execute(
+                """UPDATE rehearsals SET scene_id=?, scene_name=?, name=?, notes=?,
+                       status=?, origin=?, clock_elapsed=?, clock_running=?, clock_at=?,
+                       updated_at=datetime('now') WHERE id=?""",
+                (rec.get("scene_id"), rec.get("scene_name", ""), rec["name"],
+                 rec.get("notes", ""), rec.get("status", "running"),
+                 float(rec.get("origin", 0)), float(rec.get("clock_elapsed", 0)),
+                 1 if rec.get("clock_running") else 0, rec.get("clock_at"), rec["id"]),
+            )
+            conn.execute("DELETE FROM rehearsal_beat_marks WHERE rehearsal_id=?", (rec["id"],))
+            conn.execute("DELETE FROM rehearsal_actor_marks WHERE rehearsal_id=?", (rec["id"],))
+            conn.executemany(
+                """INSERT INTO rehearsal_beat_marks(id, rehearsal_id, beat_id, actual_time, note)
+                   VALUES(?,?,?,?,?)""",
+                [(m["id"], rec["id"], m["beat_id"],
+                  None if m.get("actual_time") is None else float(m["actual_time"]),
+                  m.get("note", ""))
+                 for m in rec.get("beat_marks", [])],
+            )
+            conn.executemany(
+                """INSERT INTO rehearsal_actor_marks(id, rehearsal_id, beat_id, actor_id,
+                       actual_time, x, y, absent, note)
+                   VALUES(?,?,?,?,?,?,?,?,?)""",
+                [(m["id"], rec["id"], m["beat_id"], m["actor_id"],
+                  None if m.get("actual_time") is None else float(m["actual_time"]),
+                  None if m.get("x") is None else float(m["x"]),
+                  None if m.get("y") is None else float(m["y"]),
+                  1 if m.get("absent") else 0, m.get("note", ""))
+                 for m in rec.get("actor_marks", [])],
+            )
+        return get_rehearsal(rec["id"])
+    finally:
+        conn.close()
+
+
+def delete_rehearsal(rehearsal_id):
+    conn = get_conn()
+    try:
+        with transaction(conn):
+            cur = conn.execute("DELETE FROM rehearsals WHERE id=?", (rehearsal_id,))
+        return cur.rowcount > 0
     finally:
         conn.close()

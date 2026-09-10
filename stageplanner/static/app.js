@@ -28,6 +28,7 @@ let play = { active: false, playing: false, t: 0, raf: null, last: null };
 let compareOn = false;
 let panState = null, marquee = null, dragInfo = null;
 const keys = {};
+let appMode = 'plan';            // plan | rehearse | review（由 rehearsal.js 切换）
 
 // ---------------------------------------------------------------- 几何
 function dist(ax, ay, bx, by) { return Math.hypot(bx - ax, by - ay); }
@@ -1509,6 +1510,7 @@ $('#printOverviewBtn').addEventListener('click', () => openPrint('overview'));
 
 window.addEventListener('keydown', (e) => {
   keys[e.key === ' ' ? ' ' : e.key.toLowerCase()] = true;
+  if (appMode !== 'plan') return;   // 排练/复盘视图由 rehearsal.js 接管
   const typing = /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName);
   if (typing) return;
   if (e.key === 'Enter' && drawing) { finishDrawing(); e.preventDefault(); return; }

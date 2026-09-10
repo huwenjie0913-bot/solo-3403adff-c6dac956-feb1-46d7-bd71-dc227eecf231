@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>排练复盘单 - {{ review.name }}</title>
+<style>
+  @page { size: A4; margin: 14mm; }
+  body { font-family: "PingFang SC", "Microsoft YaHei", sans-serif; color: #222; font-size: 12px; }
+  h1 { font-size: 20px; margin: 0 0 2px; }
+  .sub { color: #666; margin-bottom: 12px; font-size: 12px; }
+  h2 { font-size: 15px; margin: 18px 0 6px; padding: 5px 9px; background: #eef3f8; border-left: 4px solid #2f6fb3; page-break-after: avoid; }
+  h3 { font-size: 13px; margin: 10px 0 4px; display: flex; align-items: center; gap: 6px; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
+  th, td { border: 1px solid #c8d2dc; padding: 4px 7px; text-align: left; vertical-align: top; }
+  th { background: #f4f7fa; font-weight: 600; white-space: nowrap; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .late { color: #c63732; font-weight: 700; }
+  .early { color: #2f6fb3; font-weight: 700; }
+  .miss { color: #9a6a00; font-weight: 700; }
+  .absent { color: #777; font-weight: 700; }
+  .none { color: #888; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .summary { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 6px 0 10px; }
+  .summary span { background: #f4f7fa; border: 1px solid #d8e0e9; border-radius: 4px; padding: 3px 9px; }
+  .notes { background: #fbf7ee; border: 1px solid #e3d9c2; border-radius: 4px; padding: 6px 9px; margin: 6px 0; white-space: pre-wrap; }
+  .actor { page-break-inside: avoid; margin-bottom: 8px; }
+  .compare-box { border: 2px solid #b39ddb; border-radius: 5px; padding: 8px 10px; margin: 10px 0; page-break-inside: avoid; }
+  ul.compact { margin: 4px 0 0; padding-left: 18px; }
+  .toolbar { margin-bottom: 10px; }
+  .toolbar button { padding: 6px 16px; font-size: 13px; cursor: pointer; }
+  @media print { .toolbar { display: none; } }
+</style>
+</head>
+<body>
+<div class="toolbar"><button onclick="window.print()">打印 / 导出 PDF</button></div>
+<h1>排练复盘单 · {{ review.name }}</h1>
+<div class="sub">场景「{{ review.scene_name }}」 · 状态：{{ '已完成' if review.status == 'finished' else '进行中' }} ·
+  共 {{ review.stats.beat_total }} 个节点 / {{ review.actors | length }} 名演员</div>
+
+{% set s = review.stats %}
+<div class="summary">
+  <span>节点漏记 <b class="miss">{{ s.beat_missing }}</b></span>
+  <span>节点延后 <b class="late">{{ s.beat_late }}</b></span>
+  <span>节点提前 <b class="early">{{ s.beat_early }}</b></span>
+  <span>演员漏打点 <b class="miss">{{ s.missed }}</b></span>
+  <span>缺席 <b class="absent">{{ s.absent }}</b></span>
+  <span>演员延后 <b class="late">{{ s.late }}</b></span>
+  <span>演员提前 <b class="early">{{ s.early }}</b></span>
+  <span>位置偏差 ≥ 0.5m <b class="late">{{ s.pos_bad }}</b></span>
+  {% if s.avg_beat_delta is not none %}<span>节点平均时差 {{ '%+.1f'|format(s.avg_beat_delta) }}s</span>{% endif %}
+  {% if s.avg_actor_delta is not none %}<span>演员平均时差 {{ '%+.1f'|format(s.avg_actor_delta) }}s</span>{% endif %}
+  {% if s.avg_pos is not none %}<span>平均位置偏差 {{ '%.2f'|format(s.avg_pos) }}m</span>{% endif %}
+</div>
+
+{% if comparison %}
+<div class="compare-box">
+  <h2 style="margin-top:0;border-left-color:#9b6dd3">并排比较：{{ comparison.r1.name }} ／ {{ comparison.r2.name }}</h2>
+  <b>反复迟到的节点：</b>
+  {% for r in comparison.recurring_time %}
+  <span class="late">{{ r.name }}（{{ '%+.1f'|format(r.d1) }}s / {{ '%+.1f'|format(r.d2) }}s）</span>{{ '；' if not loop.last }}
+  {% else %}<span class="none">无</span>{% endfor %}
+  <div style="margin-top:6px"><b>反复走位偏移（同一节点同一演员两次均 ≥ 0.5m）：</b></div>
+  <ul class="compact">
+    {% for r in comparison.recurring_pos %}
+    <li>{{ r.actor_name }} @「{{ r.beat_name }}」：{{ '%.2f'|format(r.p1) }}m / {{ '%.2f'|format(r.p2) }}m
+      {% if r.note1 or r.note2 %}（备注：{{ r.note1 }} / {{ r.note2 }}）{% endif %}</li>
+    {% else %}<li class="none">无</li>{% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<h2>按节点汇总</h2>
+<table>
+<tr><th>节点</th><th class="num">计划</th><th class="num">实测</th><th class="num">提前/延后</th>
+<th class="num">漏打点</th><th class="num">缺席</th><th class="num">延后</th><th class="num">提前</th>
+<th class="num">位置偏差≥0.5m</th><th>备注</th></tr>
+{% for b in review.beats %}
+<tr>
+  <td>{{ b.name }}</td>
+  <td class="num">{{ '%.1f'|format(b.planned) }}s</td>
+  <td class="num">{% if b.actual is not none %}{{ '%.1f'|format(b.actual) }}s{% else %}<span class="miss">漏记</span>{% endif %}</td>
+  <td class="num">{% if b.delta is not none %}<span class="{{ 'late' if b.delta > late_threshold else ('early' if b.delta < -late_threshold else '') }}">{{ '%+.1f'|format(b.delta) }}s</span>{% else %}—{% endif %}</td>
+  {% set missed = b.actors | selectattr('status','equalto','missed') | list %}
+  {% set absent = b.actors | selectattr('status','equalto','absent') | list %}
+  {% set late = b.actors | selectattr('status','equalto','late') | list %}
+  {% set early = b.actors | selectattr('status','equalto','early') | list %}
+  {% set posbad = b.actors | selectattr('pos_dev','ge',pos_threshold) | list %}
+  <td class="num">{% if missed %}<span class="miss">{{ missed | map(attribute='actor_name') | join('、') }}</span>{% else %}—{% endif %}</td>
+  <td class="num">{% if absent %}<span class="absent">{{ absent | map(attribute='actor_name') | join('、') }}</span>{% else %}—{% endif %}</td>
+  <td class="num">{% if late %}<span class="late">{{ late | length }}</span>{% else %}—{% endif %}</td>
+  <td class="num">{% if early %}<span class="early">{{ early | length }}</span>{% else %}—{% endif %}</td>
+  <td class="num">{% if posbad %}<span class="late">{{ posbad | map(attribute='actor_name') | join('、') }}</span>{% else %}—{% endif %}</td>
+  <td>{{ b.note }}</td>
+</tr>
+{% endfor %}
+</table>
+
+<h2>按演员汇总</h2>
+{% for ag in print_data.actors %}
+{% set a = ag.agg %}
+<div class="actor">
+  <h3><span class="dot" style="background:{{ ag.actor.color }}"></span>{{ ag.actor.name }}
+    <span style="font-weight:400;color:#777">
+      （{{ a.count }} 个节点：延后 {{ a.late }} / 提前 {{ a.early }} / 漏打点 {{ a.missed }} / 缺席 {{ a.absent }}；
+      平均时差 {% if a.avg_delta is not none %}{{ '%+.2f'|format(a.avg_delta) }}s{% else %}—{% endif %}，
+      最大 {{ '%.1f'|format(a.max_abs_delta) }}s；平均位置偏差
+      {% if a.avg_pos is not none %}{{ '%.2f'|format(a.avg_pos) }}m / 最大 {{ '%.2f'|format(a.max_pos) }}m{% else %}—{% endif %}）
+    </span>
+  </h3>
+  <table>
+    <tr><th>节点</th><th class="num">计划</th><th class="num">打点时刻</th><th class="num">提前/延后</th>
+      <th class="num">计划位置</th><th class="num">实测位置</th><th class="num">偏差</th><th>处理备注</th></tr>
+    {% for r in ag.rows %}
+    <tr>
+      <td>{{ r.beat_name }}</td>
+      <td class="num">{{ '%.1f'|format(r.planned) }}s</td>
+      <td class="num">
+        {% if r.absent %}<span class="absent">缺席</span>
+        {% elif r.actual_time is none %}<span class="miss">未打点</span>
+        {% else %}{{ '%.1f'|format(r.actual_time) }}s{% endif %}</td>
+      <td class="num">
+        {% if r.delta is not none %}<span class="{{ 'late' if r.delta > late_threshold else ('early' if r.delta < -late_threshold else '') }}">{{ '%+.1f'|format(r.delta) }}s</span>{% else %}—{% endif %}</td>
+      <td class="num">{{ '%.1f'|format(r.plan_x) }}, {{ '%.1f'|format(r.plan_y) }}</td>
+      <td class="num">{% if r.x is not none %}{{ '%.1f'|format(r.x) }}, {{ '%.1f'|format(r.y) }}{% else %}—{% endif %}</td>
+      <td class="num">{% if r.pos_dev is not none %}<span class="{{ 'late' if r.pos_dev >= pos_threshold else '' }}">{{ '%.2f'|format(r.pos_dev) }}m</span>{% else %}—{% endif %}</td>
+      <td>{{ r.note }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% else %}
+<p class="none">本场景快照中没有演员。</p>
+{% endfor %}
+
+<h2>排练总备注</h2>
+{% if review.notes %}<div class="notes">{{ review.notes }}</div>{% else %}<p class="none">（无）</p>{% endif %}
+
+{% if other %}
+<h2 style="border-left-color:#9b6dd3">对照排练 · {{ other.rec.name }} 按演员摘要</h2>
+{% for ag in other.print_data.actors %}
+{% set a = ag.agg %}
+<h3><span class="dot" style="background:{{ ag.actor.color }}"></span>{{ ag.actor.name }}
+  <span style="font-weight:400;color:#777">（延后 {{ a.late }} / 提前 {{ a.early }} / 漏打点 {{ a.missed }} / 缺席 {{ a.absent }}；
+  平均时差 {% if a.avg_delta is not none %}{{ '%+.2f'|format(a.avg_delta) }}s{% else %}—{% endif %}，
+  平均位置偏差 {% if a.avg_pos is not none %}{{ '%.2f'|format(a.avg_pos) }}m{% else %}—{% endif %}）</span></h3>
+{% endfor %}
+{% endif %}
+</body>
+</html>

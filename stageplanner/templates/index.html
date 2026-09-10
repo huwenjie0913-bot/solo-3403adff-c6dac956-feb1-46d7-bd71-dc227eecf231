@@ -9,21 +9,28 @@
 <body>
 <div id="app">
   <header id="topbar">
-    <div class="brand">🎭 舞台走位编排</div>
+    <div class="brand">🎭 舞台走位排练板</div>
+    <div id="modeTabs">
+      <button type="button" data-mode="plan" class="mtab active">编排</button>
+      <button type="button" data-mode="rehearse" class="mtab">排练实录</button>
+      <button type="button" data-mode="review" class="mtab">复盘</button>
+    </div>
     <select id="stageSelect" title="切换舞台"></select>
     <button id="newStageBtn" type="button">新建舞台</button>
-    <span class="sep"></span>
-    <button id="undoBtn" type="button" title="撤销 Ctrl+Z">↶ 撤销</button>
-    <button id="redoBtn" type="button" title="重做 Ctrl+Y">↷ 重做</button>
-    <button id="copyBtn" type="button" title="复制选中节点 (Ctrl+D 复制节点)">⧉ 复制节点</button>
-    <button id="deleteBtn" type="button" title="删除选中 (Delete)">🗑 删除</button>
+    <span class="sep plan-only"></span>
+    <button id="undoBtn" type="button" class="plan-only" title="撤销 Ctrl+Z">↶ 撤销</button>
+    <button id="redoBtn" type="button" class="plan-only" title="重做 Ctrl+Y">↷ 重做</button>
+    <button id="copyBtn" type="button" class="plan-only" title="复制选中节点 (Ctrl+D 复制节点)">⧉ 复制节点</button>
+    <button id="deleteBtn" type="button" class="plan-only" title="删除选中 (Delete)">🗑 删除</button>
     <span class="spacer"></span>
-    <button id="printCuesBtn" type="button">🖨 演员提示单</button>
-    <button id="printOverviewBtn" type="button">🖨 可打印总览</button>
-    <button id="saveBtn" type="button" class="primary">保存</button>
+    <button id="printCuesBtn" type="button" class="plan-only">🖨 演员提示单</button>
+    <button id="printOverviewBtn" type="button" class="plan-only">🖨 可打印总览</button>
+    <button id="printReviewBtn" type="button" class="review-only hidden">🖨 复盘单</button>
+    <button id="saveBtn" type="button" class="primary plan-only">保存</button>
     <span id="saveState"></span>
   </header>
 
+  <div id="planView">
   <div id="main">
     <aside id="leftPanel">
       <section class="panel">
@@ -94,8 +101,175 @@
     <button type="button" id="drawFinishBtn">完成 (Enter)</button>
     <button type="button" id="drawCancelBtn">取消 (Esc)</button>
   </div>
+  </div><!-- /planView -->
+
+  <!-- ============================================================ 排练实录 -->
+  <div id="rehearseView" class="modeView hidden">
+    <div class="rh-main">
+      <aside class="rh-side">
+        <section class="panel">
+          <h3>开始排练</h3>
+          <label>场景
+            <select id="rhSceneSelect"></select>
+          </label>
+          <label>名称 <input id="rhName" type="text" placeholder="如：第一次连排"></label>
+          <div class="grid2">
+            <label>倒计时(s) <input id="rhCountdown" type="number" min="0" max="30" step="1" value="3"></label>
+            <label>排练 <select id="rhExisting"></select></label>
+          </div>
+          <button id="rhStartBtn" type="button" class="primary wide">▶ 开始排练</button>
+          <button id="rhOpenBtn" type="button" class="wide">打开选中的排练</button>
+          <div class="hint">开排时会冻结当前编排快照；之后修改原方案不影响本次记录。</div>
+        </section>
+        <section class="panel hidden" id="rhRunPanel">
+          <h3>排练控制
+            <select id="rhBeatJump" class="mini-select"></select>
+          </h3>
+          <div id="rhClock">0.0s</div>
+          <div class="rh-buttons">
+            <button id="rhRecordBtn" type="button" class="primary" title="空格">⏺ 记录节点</button>
+            <button id="rhPauseBtn" type="button">⏸ 暂停</button>
+          </div>
+          <div class="rh-buttons">
+            <button id="rhBackBtn" type="button" title="撤销最后一个已记录节点">↶ 回退节点</button>
+            <button id="rhMakeupBtn" type="button" title="补记漏掉的节点时刻">✎ 补记节点</button>
+          </div>
+          <div class="rh-buttons">
+            <button id="rhFinishBtn" type="button">⏹ 结束排练</button>
+            <button id="rhGoReviewBtn" type="button">📊 去复盘</button>
+          </div>
+          <div id="rhStatus" class="hint"></div>
+        </section>
+        <section class="panel hidden" id="rhBeatPanel">
+          <h3>节点进度</h3>
+          <ul id="rhBeatList" class="rh-beatlist"></ul>
+        </section>
+      </aside>
+
+      <main class="rh-center">
+        <div id="rhCanvasWrap" class="rh-canvaswrap">
+          <canvas id="rhCanvas"></canvas>
+          <div id="rhOverlay" class="rh-overlay hidden">
+            <div id="rhCountText">3</div>
+            <div id="rhOverlaySub">准备开始排练</div>
+          </div>
+          <div class="rh-legend">
+            <span><i class="lg-plan"></i>计划位置（空心）</span>
+            <span><i class="lg-actual"></i>实测位置（实心，可拖动修正）</span>
+            <span><i class="lg-absent"></i>缺席</span>
+          </div>
+          <div class="rh-zoom">
+            <button type="button" id="rhZoomOut">－</button>
+            <button type="button" id="rhZoomIn">＋</button>
+            <button type="button" id="rhZoomFit">适应</button>
+          </div>
+        </div>
+        <div class="rh-tip">空格 = 记录当前节点并推进；点击演员行或其标记 = 打点到位；暂停后仍可补记、回退、拖动修正实测位置。</div>
+      </main>
+
+      <aside class="rh-side rh-side-r">
+        <section class="panel">
+          <h3>演员到位打点</h3>
+          <ul id="rhActorList" class="rh-actorlist"></ul>
+        </section>
+        <section class="panel">
+          <h3>处理备注</h3>
+          <textarea id="rhBeatNote" rows="2" placeholder="当前节点的处理备注"></textarea>
+          <label class="rh-label">演员备注
+            <select id="rhNoteActor"></select>
+          </label>
+          <textarea id="rhActorNote" rows="2" placeholder="该演员在本节点的处理备注（复盘可见）"></textarea>
+          <h3 style="margin-top:10px">排练总备注</h3>
+          <textarea id="rhNotes" rows="3" placeholder="整体排练备注，保存在本次排练记录中"></textarea>
+        </section>
+      </aside>
+    </div>
+  </div>
+
+  <!-- ============================================================ 复盘 -->
+  <div id="reviewView" class="modeView hidden">
+    <div class="rv-main">
+      <aside class="rv-side">
+        <section class="panel">
+          <h3>选择排练</h3>
+          <label>排练 A
+            <select id="rvSelectA"></select>
+          </label>
+          <label class="rv-compare">
+            <input type="checkbox" id="rvCompareChk"> 并排比较排练 B
+          </label>
+          <label id="rvSelectBWrap" class="hidden">排练 B
+            <select id="rvSelectB"></select>
+          </label>
+          <button id="rvReloadBtn" type="button" class="wide">重新载入</button>
+          <button id="rvDeleteBtn" type="button" class="wide danger">删除排练 A</button>
+        </section>
+        <section class="panel">
+          <h3>节点汇总</h3>
+          <ul id="rvBeatSummary" class="rv-beatlist"></ul>
+        </section>
+        <section class="panel">
+          <h3>按演员汇总</h3>
+          <ul id="rvActorSummary" class="rv-actorlist"></ul>
+        </section>
+        <section class="panel" id="rvRecurringPanel">
+          <h3>反复出现的问题</h3>
+          <div id="rvRecurring"></div>
+        </section>
+        <section class="panel">
+          <h3>处理备注</h3>
+          <textarea id="rvNotes" rows="3" placeholder="排练总备注（自动保存）"></textarea>
+        </section>
+      </aside>
+
+      <main class="rv-center">
+        <div id="rvCanvases" class="rv-canvases">
+          <div class="rv-pane">
+            <div class="rv-pane-head"><span id="rvTitleA">排练 A</span></div>
+            <div class="rv-canvaswrap"><canvas id="rvCanvasA"></canvas></div>
+          </div>
+          <div class="rv-pane hidden" id="rvPaneB">
+            <div class="rv-pane-head"><span id="rvTitleB">排练 B</span></div>
+            <div class="rv-canvaswrap"><canvas id="rvCanvasB"></canvas></div>
+          </div>
+        </div>
+        <div id="rvTimelineWrap" class="rv-timelinewrap">
+          <div class="rv-tl-controls">
+            <button type="button" id="rvPlayBtn">▶</button>
+            <select id="rvBeatJump"></select>
+            <span id="rvTimeLabel">0.0s</span>
+            <span class="rv-tl-legend">
+              <i class="lg-plan"></i>计划 <i class="lg-actual"></i>实测
+              <span class="rv-key">点击时间轴/偏差行可定位回放</span>
+            </span>
+          </div>
+          <div id="rvTimeline" class="rv-timeline"></div>
+        </div>
+      </main>
+
+      <aside class="rv-side rv-side-r">
+        <section class="panel">
+          <h3>偏差明细 <span id="rvCurBeatName" class="rv-curbeat"></span></h3>
+          <ul id="rvDiffList" class="rv-difflist"></ul>
+        </section>
+        <section class="panel">
+          <h3>复制到新编排副本</h3>
+          <label>新副本名称 <input id="rvPromoteName" type="text" placeholder="默认：原舞台名 · 排练修订副本"></label>
+          <div class="rv-promo-actions">
+            <button type="button" id="rvPromoteTimes" class="mini">全选实测时间</button>
+            <button type="button" id="rvPromotePos" class="mini">全选实测位置</button>
+            <button type="button" id="rvPromoteClear" class="mini">清空选择</button>
+          </div>
+          <ul id="rvPromoteList" class="rv-promotelist"></ul>
+          <button id="rvPromoteBtn" type="button" class="primary wide">⧉ 生成编排副本</button>
+          <div id="rvPromoteResult" class="hint"></div>
+        </section>
+      </aside>
+    </div>
+  </div>
 </div>
 <script>window.INITIAL_STAGE_ID = {{ (current.id if current else '')|tojson }};</script>
 <script src="{{ url_for('static', filename='app.js') }}"></script>
+<script src="{{ url_for('static', filename='rehearsal.js') }}"></script>
 </body>
 </html>
