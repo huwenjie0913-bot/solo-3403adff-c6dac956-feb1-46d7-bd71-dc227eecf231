@@ -151,29 +151,54 @@ def save_document(doc):
             # 子表：以客户端 id 集合为准，先删后插（同一事务内）
             child_specs = [
                 ("regions", doc.get("regions", []),
-                 "INSERT INTO regions(id, stage_id, name, kind, points, color) VALUES(?,?,?,?,?,?)",
+                 """INSERT INTO regions(id, stage_id, name, kind, points, color)
+                    VALUES(?,?,?,?,?,?)
+                    ON CONFLICT(id) DO UPDATE SET
+                      name=excluded.name, kind=excluded.kind,
+                      points=excluded.points, color=excluded.color,
+                      stage_id=excluded.stage_id""",
                  lambda r: (r["id"], sid, r["name"], r.get("kind", "area"),
                             json.dumps(r["points"]), r.get("color", "#8ab4f8"))),
                 ("actors", doc.get("actors", []),
-                 "INSERT INTO actors(id, stage_id, name, speed, color) VALUES(?,?,?,?,?)",
+                 """INSERT INTO actors(id, stage_id, name, speed, color)
+                    VALUES(?,?,?,?,?)
+                    ON CONFLICT(id) DO UPDATE SET
+                      name=excluded.name, speed=excluded.speed,
+                      color=excluded.color, stage_id=excluded.stage_id""",
                  lambda r: (r["id"], sid, r["name"], float(r["speed"]),
                             r.get("color", "#e8734a"))),
                 ("scenes", doc.get("scenes", []),
-                 "INSERT INTO scenes(id, stage_id, name, position) VALUES(?,?,?,?)",
+                 """INSERT INTO scenes(id, stage_id, name, position)
+                    VALUES(?,?,?,?)
+                    ON CONFLICT(id) DO UPDATE SET
+                      name=excluded.name, position=excluded.position,
+                      stage_id=excluded.stage_id""",
                  lambda r: (r["id"], sid, r["name"], int(r["position"]))),
                 ("beats", doc.get("beats", []),
-                 "INSERT INTO beats(id, stage_id, scene_id, name, position, time) VALUES(?,?,?,?,?,?)",
+                 """INSERT INTO beats(id, stage_id, scene_id, name, position, time)
+                    VALUES(?,?,?,?,?,?)
+                    ON CONFLICT(id) DO UPDATE SET
+                      scene_id=excluded.scene_id, name=excluded.name,
+                      position=excluded.position, time=excluded.time,
+                      stage_id=excluded.stage_id""",
                  lambda r: (r["id"], sid, r.get("scene_id"), r["name"],
                             int(r["position"]), float(r["time"]))),
                 ("placements", doc.get("placements", []),
                  """INSERT INTO placements(id, stage_id, beat_id, actor_id, x, y, facing)
                     VALUES(?,?,?,?,?,?,?)
-                    ON CONFLICT(beat_id, actor_id) DO UPDATE SET
-                      id=excluded.id, x=excluded.x, y=excluded.y, facing=excluded.facing""",
+                    ON CONFLICT(id) DO UPDATE SET
+                      beat_id=excluded.beat_id, actor_id=excluded.actor_id,
+                      x=excluded.x, y=excluded.y, facing=excluded.facing,
+                      stage_id=excluded.stage_id""",
                  lambda r: (r["id"], sid, r["beat_id"], r["actor_id"],
                             float(r["x"]), float(r["y"]), float(r.get("facing", 0)))),
                 ("paths", doc.get("paths", []),
-                 "INSERT INTO paths(id, stage_id, from_beat_id, to_beat_id, actor_id, points) VALUES(?,?,?,?,?,?)",
+                 """INSERT INTO paths(id, stage_id, from_beat_id, to_beat_id, actor_id, points)
+                    VALUES(?,?,?,?,?,?)
+                    ON CONFLICT(id) DO UPDATE SET
+                      from_beat_id=excluded.from_beat_id,
+                      to_beat_id=excluded.to_beat_id, actor_id=excluded.actor_id,
+                      points=excluded.points, stage_id=excluded.stage_id""",
                  lambda r: (r["id"], sid, r["from_beat_id"], r["to_beat_id"],
                             r["actor_id"], json.dumps(r["points"]))),
             ]

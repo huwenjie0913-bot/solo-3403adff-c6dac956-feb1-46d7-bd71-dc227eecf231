@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>演员提示单 - {{ d.stage.name }}</title>
+<style>
+  @page { size: A4; margin: 14mm; }
+  body { font-family: "PingFang SC", "Microsoft YaHei", sans-serif; color: #222; font-size: 12px; }
+  h1 { font-size: 20px; margin: 0 0 2px; }
+  .sub { color: #666; margin-bottom: 14px; font-size: 12px; }
+  h2 { font-size: 15px; margin: 18px 0 6px; padding: 5px 9px; background: #eef3f8; border-left: 4px solid #2f6fb3; page-break-after: avoid; }
+  .actor { margin-bottom: 10px; page-break-inside: avoid; }
+  .actor h3 { font-size: 13px; margin: 8px 0 4px; display: flex; align-items: center; gap: 6px; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { border: 1px solid #c8d2dc; padding: 4px 7px; text-align: left; vertical-align: top; }
+  th { background: #f4f7fa; font-weight: 600; white-space: nowrap; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .bad { color: #c63732; font-weight: 700; }
+  .none { color: #888; }
+  .toolbar { margin-bottom: 10px; }
+  .toolbar button { padding: 6px 16px; font-size: 13px; cursor: pointer; }
+  @media print { .toolbar { display: none; } }
+</style>
+</head>
+<body>
+<div class="toolbar"><button onclick="window.print()">打印 / 导出 PDF</button></div>
+<h1>演员提示单 · {{ d.stage.name }}</h1>
+<div class="sub">舞台 {{ d.stage.width }}m × {{ d.stage.height }}m ·
+  共 {{ print_data.scenes | length }} 个场景 / {{ d.beats | length }} 个节点 / {{ d.actors | length }} 名演员</div>
+
+{% for sg in print_data.scenes %}
+<h2>🎬 {{ sg.scene.name }}（{{ sg.beats | length }} 个节点）</h2>
+{% for ag in sg.actors %}
+<div class="actor">
+  <h3><span class="dot" style="background:{{ ag.actor.color }}"></span>{{ ag.actor.name }}
+    <span style="font-weight:400;color:#777">（常用步速 {{ '%.1f'|format(ag.actor.speed) }} m/s）</span></h3>
+  <table>
+    <tr><th class="num">到位时间</th><th>节点</th><th class="num">位置 X / Y</th><th>朝向</th><th class="num">移动距离/耗时</th><th>提示</th></tr>
+    {% for row in ag.rows %}
+    <tr>
+      <td class="num">{{ '%.0f'|format(row.beat.time) }}s</td>
+      <td>{{ row.beat.name }}</td>
+      <td class="num">{{ '%.1f'|format(row.pl.x) }} / {{ '%.1f'|format(row.pl.y) }}</td>
+      <td>{{ '%d'|format(row.pl.facing) }}°（{{ row.facing_text }}）</td>
+      <td class="num">
+        {% if row.first %}<span class="none">入场定位</span>
+        {% else %}<span class="{{ 'bad' if row.timing_bad }}">{{ '%.1f'|format(row.length) }}m / {{ '%.1f'|format(row.duration) }}s</span>{% endif %}
+      </td>
+      <td>
+        {% if row.timing_bad %}<span class="bad">⚠ 时间不足（仅 {{ '%.1f'|format(row.available) }}s），需提速或调整路径</span><br>{% endif %}
+        {% if row.obs_bad %}<span class="bad">⚠ 路径穿越障碍，请绕行</span><br>{% endif %}
+        {% if row.first %}就位，面向{{ row.facing_text }}{% else %}移动至「{{ row.beat.name }}」位置，面向{{ row.facing_text }}{% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% else %}
+<p class="none">本场景尚未安排任何演员走位。</p>
+{% endfor %}
+{% endfor %}
+</body>
+</html>

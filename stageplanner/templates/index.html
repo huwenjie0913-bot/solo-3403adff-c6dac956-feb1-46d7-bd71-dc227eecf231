@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>舞台走位编排</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <div class="brand">🎭 舞台走位编排</div>
+    <select id="stageSelect" title="切换舞台"></select>
+    <button id="newStageBtn" type="button">新建舞台</button>
+    <span class="sep"></span>
+    <button id="undoBtn" type="button" title="撤销 Ctrl+Z">↶ 撤销</button>
+    <button id="redoBtn" type="button" title="重做 Ctrl+Y">↷ 重做</button>
+    <button id="copyBtn" type="button" title="复制选中节点 (Ctrl+D 复制节点)">⧉ 复制节点</button>
+    <button id="deleteBtn" type="button" title="删除选中 (Delete)">🗑 删除</button>
+    <span class="spacer"></span>
+    <button id="printCuesBtn" type="button">🖨 演员提示单</button>
+    <button id="printOverviewBtn" type="button">🖨 可打印总览</button>
+    <button id="saveBtn" type="button" class="primary">保存</button>
+    <span id="saveState"></span>
+  </header>
+
+  <div id="main">
+    <aside id="leftPanel">
+      <section class="panel">
+        <h3>舞台</h3>
+        <label>名称 <input id="stageName" type="text"></label>
+        <div class="grid2">
+          <label>宽(m) <input id="stageW" type="number" step="0.1" min="0.5"></label>
+          <label>高(m) <input id="stageH" type="number" step="0.1" min="0.5"></label>
+        </div>
+        <div class="tools">
+          <button type="button" data-tool="select" class="tool active">选择/移动</button>
+          <button type="button" data-tool="area">绘制区域</button>
+          <button type="button" data-tool="obstacle">绘制障碍</button>
+          <button type="button" data-tool="path">编辑路径</button>
+        </div>
+        <div class="hint" id="toolHint">拖动演员标记安排位置；按住 Shift 多选。</div>
+      </section>
+
+      <section class="panel">
+        <h3>演员 <button type="button" id="addActorBtn" class="mini">+ 添加</button></h3>
+        <ul id="actorList" class="itemlist"></ul>
+      </section>
+
+      <section class="panel">
+        <h3>区域 / 障碍</h3>
+        <ul id="regionList" class="itemlist"></ul>
+      </section>
+    </aside>
+
+    <main id="center">
+      <div id="canvasWrap">
+        <canvas id="stageCanvas"></canvas>
+        <div id="zoomCtl">
+          <button type="button" id="zoomOutBtn">－</button>
+          <span id="zoomLabel">100%</span>
+          <button type="button" id="zoomInBtn">＋</button>
+          <button type="button" id="zoomFitBtn">适应</button>
+        </div>
+      </div>
+      <div id="timelineBar">
+        <button type="button" id="playBtn">▶</button>
+        <input id="timeScrub" type="range" min="0" max="1000" value="0">
+        <span id="timeLabel">0.0s</span>
+        <label class="compare"><input type="checkbox" id="compareChk"> 比较相邻节点</label>
+        <span id="compareLabel"></span>
+      </div>
+    </main>
+
+    <aside id="rightPanel">
+      <section class="panel">
+        <h3>场景 <button type="button" id="addSceneBtn" class="mini">+ 场景</button></h3>
+        <ul id="sceneList" class="scenelist"></ul>
+      </section>
+      <section class="panel problems">
+        <h3>问题清单 <span id="problemCount" class="badge">0</span></h3>
+        <ul id="problemList"></ul>
+      </section>
+      <section class="panel" id="inspectorPanel">
+        <h3>属性</h3>
+        <div id="inspector"><p class="muted">未选中任何对象</p></div>
+      </section>
+    </aside>
+  </div>
+
+  <!-- 绘制多边形时的浮动提示条 -->
+  <div id="drawBar" class="hidden">
+    <span id="drawInfo">点击画布添加顶点</span>
+    <button type="button" id="drawFinishBtn">完成 (Enter)</button>
+    <button type="button" id="drawCancelBtn">取消 (Esc)</button>
+  </div>
+</div>
+<script>window.INITIAL_STAGE_ID = {{ (current.id if current else '')|tojson }};</script>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

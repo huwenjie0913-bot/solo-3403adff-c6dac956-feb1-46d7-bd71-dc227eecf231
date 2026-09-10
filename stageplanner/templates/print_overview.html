@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>走位总览 - {{ d.stage.name }}</title>
+<style>
+  @page { size: A4 landscape; margin: 10mm; }
+  body { font-family: "PingFang SC", "Microsoft YaHei", sans-serif; color: #222; font-size: 11px; }
+  h1 { font-size: 19px; margin: 0 0 2px; }
+  .sub { color: #666; margin-bottom: 12px; }
+  h2 { font-size: 14px; margin: 16px 0 6px; padding: 4px 8px; background: #eef3f8; border-left: 4px solid #2f6fb3; page-break-after: avoid; }
+  .grid { display: flex; flex-wrap: wrap; gap: 10px; }
+  .card { border: 1px solid #c8d2dc; border-radius: 5px; padding: 6px 8px; page-break-inside: avoid; background: #fff; }
+  .card.bad { border-color: #d9534f; border-width: 2px; }
+  .card h4 { margin: 0 0 4px; font-size: 12px; display: flex; justify-content: space-between; gap: 8px; }
+  .tag { font-weight: 400; color: #888; }
+  .tag.err { color: #c63732; font-weight: 700; }
+  svg { display: block; }
+  .legend { display: flex; flex-wrap: wrap; gap: 12px; margin: 6px 0 4px; font-size: 11px; color: #444; }
+  .legend span { display: inline-flex; align-items: center; gap: 4px; }
+  .toolbar { margin-bottom: 8px; }
+  .toolbar button { padding: 6px 16px; font-size: 13px; cursor: pointer; }
+  @media print { .toolbar { display: none; } body { font-size: 10px; } }
+</style>
+</head>
+<body>
+{% set W = d.stage.width %}{% set H = d.stage.height %}
+{% set beats_sorted = d.beats | sort(attribute='position') %}
+{% set placements_by_beat = {} %}
+{% for p in d.placements %}{% set _ = placements_by_beat.setdefault(p.beat_id, []).append(p) %}{% endfor %}
+{% set actors_by_id = {} %}
+{% for a in d.actors %}{% set _ = actors_by_id.update({a.id: a}) %}{% endfor %}
+
+<div class="toolbar"><button onclick="window.print()">打印 / 导出 PDF</button></div>
+<h1>舞台走位总览 · {{ d.stage.name }}</h1>
+<div class="sub">{{ W }}m × {{ H }}m · {{ d.scenes | length }} 个场景 / {{ d.beats | length }} 个节点 / {{ d.actors | length }} 名演员</div>
+<div class="legend">
+  <span>● 演员位置（数字=演员序号，短线=朝向）</span>
+  <span><svg width="22" height="6"><line x1="0" y1="3" x2="22" y2="3" stroke="#5a8" stroke-width="2"/></svg>移动路径</span>
+  <span><svg width="22" height="6"><line x1="0" y1="3" x2="22" y2="3" stroke="#d9534f" stroke-width="2.5"/></svg>超时路径</span>
+  <span style="color:#b53834">▨ 障碍</span>
+  <span style="color:#2f6fb3">▢ 区域</span>
+</div>
+
+{% macro stage_svg(beat_id, prev_beat_id, compact) %}
+{% set sw = 340 %}{% set sc = sw / W %}{% set sh = H * sc %}
+<svg width="{{ sw }}" height="{{ sh + 16 }}" viewBox="0 0 {{ W }} {{ H + 0.5 }}">
+  <defs>
+    <pattern id="hatch{{ beat_id }}" patternUnits="userSpaceOnUse" width="0.25" height="0.25" patternTransform="rotate(45)">
+      <line x1="0" y1="0" x2="0" y2="0.25" stroke="rgba(181,56,52,.6)" stroke-width="0.03"/>
+    </pattern>
+  </defs>
+  <rect x="0" y="0" width="{{ W }}" height="{{ H }}" fill="#fbf7ee" stroke="#33414f" stroke-width="{{ 0.06 }}"/>
+  {% for x in range(1, W | int) %}<line x1="{{ x }}" y1="0" x2="{{ x }}" y2="{{ H }}" stroke="#e7e0d2" stroke-width="0.015"/>{% endfor %}
+  {% for y in range(1, H | int) %}<line x1="0" y1="{{ y }}" x2="{{ W }}" y2="{{ y }}" stroke="#e7e0d2" stroke-width="0.015"/>{% endfor %}
+  {% for r in d.regions %}
+  <polygon points="{{ r.points | map('join', ',') | map('string') | join(' ') }}"
+    fill="{{ '#d9534f' if r.kind == 'obstacle' else r.color }}"
+    fill-opacity="{{ '0.28' if r.kind == 'obstacle' else '0.2' }}"
+    stroke="{{ '#b53834' if r.kind == 'obstacle' else '#2f6fb3' }}" stroke-width="0.04"/>
+  {% if r.kind == 'obstacle' %}<polygon points="{{ r.points | map('join', ',') | map('string') | join(' ') }}" fill="url(#hatch{{ beat_id }})"/>{% endif %}
+  {% endfor %}
+
+  {% if prev_beat_id %}
+  {% set path_rows = analysis.moves.items() | selectattr('0', 'equalto', beat_id ~ ':') | list %}
+  {% for actor in d.actors %}
+  {% set m = analysis.moves.get(beat_id ~ ':' ~ actor.id) %}
+  {% if m %}
+  <polyline points="{{ m.path_pts | map('join', ',') | map('string') | join(' ') }}"
+    fill="none" stroke="{{ '#d9534f' if not m.ok else actor.color }}" stroke-width="{{ '0.09' if not m.ok else '0.055' }}"
+    stroke-opacity="0.8"/>
+  {% endif %}
+  {% endfor %}
+  {% endif %}
+
+  {% for p in placements_by_beat.get(beat_id, []) %}
+  {% set actor = actors_by_id.get(p.actor_id) %}
+  {% if actor %}
+  {% set f = p.facing * 3.14159265 / 180 %}
+  <line x1="{{ p.x + (f | sin) * 0.34 }}" y1="{{ p.y + (f | cos) * 0.34 }}"
+        x2="{{ p.x + (f | sin) * 0.62 }}" y2="{{ p.y + (f | cos) * 0.62 }}" stroke="#23303d" stroke-width="0.05"/>
+  <circle cx="{{ p.x }}" cy="{{ p.y }}" r="0.3" fill="{{ actor.color }}" stroke="#fff" stroke-width="0.05"/>
+  <text x="{{ p.x }}" y="{{ p.y + 0.11 }}" font-size="0.3" fill="#fff" text-anchor="middle" font-weight="bold">{{ loop.index }}</text>
+  <text x="{{ p.x }}" y="{{ p.y - 0.42 }}" font-size="0.3" fill="#23303d" text-anchor="middle">{{ actor.name }}</text>
+  {% endif %}
+  {% endfor %}
+
+  <line x1="0" y1="{{ H + 0.18 }}" x2="{{ W }}" y2="{{ H + 0.18 }}" stroke="#33414f" stroke-width="0.03" stroke-dasharray="0.2 0.12"/>
+  <text x="{{ W / 2 }}" y="{{ H + 0.44 }}" font-size="0.3" fill="#5a6b7c" text-anchor="middle">观 众 席</text>
+</svg>
+{% endmacro %}
+
+{% for scene in d.scenes %}
+{% set scene_beats = beats_sorted | selectattr('scene_id', 'equalto', scene.id) | list %}
+<h2>🎬 {{ scene.name }}（{{ scene_beats | length }} 个节点）</h2>
+<div class="grid">
+  {% for beat in scene_beats %}
+  {% set beat_problems = analysis.problems | selectattr('beat_id', 'equalto', beat.id) | list %}
+  {% set prev_beat = scene_beats[loop.index0 - 1] if loop.index0 > 0 else none %}
+  <div class="card {{ 'bad' if beat_problems }}">
+    <h4><span>{{ '%.0f'|format(beat.time) }}s · {{ beat.name }}</span>
+      {% if beat_problems %}<span class="tag err">⚠ {{ beat_problems | length }} 个问题</span>
+      {% else %}<span class="tag">{{ placements_by_beat.get(beat.id, []) | length }} 人就位</span>{% endif %}
+    </h4>
+    {{ stage_svg(beat.id, prev_beat.id if prev_beat else none, false) }}
+    {% if beat_problems %}
+    <ul style="margin:4px 0 0 14px;padding:0;color:#c63732;">
+      {% for pr in beat_problems[:4] %}<li>{{ pr.message }}</li>{% endfor %}
+      {% if beat_problems | length > 4 %}<li>…等 {{ beat_problems | length }} 个问题</li>{% endif %}
+    </ul>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% endfor %}
+</body>
+</html>
