@@ -135,8 +135,8 @@ def create_app(db_path=None, testing=False):
             "status": "running",
             "origin": origin,
             "clock_elapsed": 0,
-            "clock_running": True,
-            "clock_at": datetime_now_iso(),
+            "clock_running": False,   # 倒计时结束、前端收到响应后才起算
+            "clock_at": None,
             "beat_marks": [],
             "actor_marks": [],
         }

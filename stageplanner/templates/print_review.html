@@ -84,7 +84,7 @@
   {% set absent = b.actors | selectattr('status','equalto','absent') | list %}
   {% set late = b.actors | selectattr('status','equalto','late') | list %}
   {% set early = b.actors | selectattr('status','equalto','early') | list %}
-  {% set posbad = b.actors | selectattr('pos_dev','ge',pos_threshold) | list %}
+  {% set posbad = b.actors | selectattr('pos_dev','ne',none) | selectattr('pos_dev','ge',pos_threshold) | list %}
   <td class="num">{% if missed %}<span class="miss">{{ missed | map(attribute='actor_name') | join('、') }}</span>{% else %}—{% endif %}</td>
   <td class="num">{% if absent %}<span class="absent">{{ absent | map(attribute='actor_name') | join('、') }}</span>{% else %}—{% endif %}</td>
   <td class="num">{% if late %}<span class="late">{{ late | length }}</span>{% else %}—{% endif %}</td>

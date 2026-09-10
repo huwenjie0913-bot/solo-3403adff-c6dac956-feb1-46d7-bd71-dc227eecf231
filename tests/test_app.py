@@ -133,3 +133,135 @@ def test_facing_text():
     assert facing_text(0) == "正观众"
     assert facing_text(90) == "舞台右"
     assert facing_text(180) == "正后台"
+
+
+# ------------------------------------------------------------- 排练实录 / 复盘
+def _rehearsal_doc(sid="s9"):
+    doc = make_doc()
+    doc["stage"]["id"] = sid
+    return doc
+
+
+def test_rehearsal_full_flow(client):
+    sid = client.post("/api/stages", json={"name": "排练台"}).get_json()["stage"]["id"]
+    doc = _rehearsal_doc(sid)
+    client.put(f"/api/stages/{sid}", json=doc)
+
+    # 未选场景应被拒绝
+    rv = client.post(f"/api/stages/{sid}/rehearsals", json={})
+    assert rv.status_code == 400
+
+    rv = client.post(f"/api/stages/{sid}/rehearsals", json={"scene_id": "sc1", "name": "首排"})
+    assert rv.status_code == 201
+    rec = rv.get_json()
+    rid = rec["id"]
+    assert rec["scene_name"] == "第一幕"
+    assert rec["origin"] == 0.0
+    assert rec["snapshot"]["stage"]["id"] == sid   # 快照随排练冻结
+    assert client.get(f"/api/stages/{sid}/rehearsals").get_json()[0]["id"] == rid
+
+    # b1 甲晚到 1.5s 且位置偏移 1m；乙完全未打点；b2 整节点漏记；甲 b2 缺席
+    payload = {
+        "name": "首排", "notes": "整体偏慢", "status": "running",
+        "clock_elapsed": 9.0, "clock_running": False, "clock_at": None,
+        "beat_marks": [
+            {"id": "bm1", "beat_id": "b1", "actual_time": 1.5, "note": ""},
+            {"id": "bm2", "beat_id": "b2", "actual_time": None, "note": "节点漏记"},
+        ],
+        "actor_marks": [
+            {"id": "am1", "beat_id": "b1", "actor_id": "a1",
+             "actual_time": 1.6, "x": 2.0, "y": 4.0, "absent": 0, "note": "慢"},
+            {"id": "am3", "beat_id": "b2", "actor_id": "a1",
+             "actual_time": None, "x": None, "y": None, "absent": 1, "note": ""},
+        ],
+    }
+    assert client.put(f"/api/rehearsals/{rid}", json=payload).status_code == 200
+
+    review = client.get(f"/api/rehearsals/{rid}/review").get_json()
+    b1 = next(b for b in review["beats"] if b["beat_id"] == "b1")
+    b2 = next(b for b in review["beats"] if b["beat_id"] == "b2")
+    assert b1["status"] == "late" and b1["delta"] == 1.5
+    assert b2["status"] == "missing"
+    a2_b1 = next(a for a in b1["actors"] if a["actor_id"] == "a2")
+    assert a2_b1["status"] == "missed"
+    assert a2_b1["pos_dev"] is None and a2_b1["actual_time"] is None
+    a1_b1 = next(a for a in b1["actors"] if a["actor_id"] == "a1")
+    assert a1_b1["pos_dev"] == 1.0
+    assert review["stats"]["beat_missing"] == 1
+    assert review["stats"]["absent"] >= 1
+
+    # 关键回归：含漏打点（pos_dev=None）时打印复盘单不得 500
+    rv = client.get(f"/print/rehearsals/{rid}/review")
+    assert rv.status_code == 200
+    assert "排练复盘单".encode() in rv.data
+
+    # 选择性回写：b1 节点时间 + 甲 b1 实测位置 -> 新副本，不改原舞台
+    rv = client.post(f"/api/rehearsals/{rid}/promote", json={
+        "name": "修订副本",
+        "times": [["b1", None, 1.5]],
+        "positions": [["b1", "a1", 2.0, 4.0]],
+    })
+    assert rv.status_code == 201
+    new_doc = rv.get_json()
+    assert new_doc["stage"]["id"] != sid
+    assert new_doc["stage"]["name"] == "修订副本"
+    new_b1 = next(b for b in new_doc["beats"] if b["name"] == "节点1")
+    assert new_b1["time"] == 1.5
+    new_a1 = next(a for a in new_doc["actors"] if a["name"] == "甲")
+    new_pl = next(p for p in new_doc["placements"]
+                  if p["beat_id"] == new_b1["id"] and p["actor_id"] == new_a1["id"])
+    assert (new_pl["x"], new_pl["y"]) == (2.0, 4.0)
+    # 原方案时间未被改动
+    orig = client.get(f"/api/stages/{sid}").get_json()
+    assert next(b for b in orig["beats"] if b["id"] == "b1")["time"] == 0.0
+
+    assert client.delete(f"/api/rehearsals/{rid}").status_code == 200
+    assert client.get(f"/api/rehearsals/{rid}/review").status_code == 404
+
+
+def test_rehearsal_compare(client):
+    sid = client.post("/api/stages", json={"name": "比较台"}).get_json()["stage"]["id"]
+    doc = _rehearsal_doc(sid)
+    client.put(f"/api/stages/{sid}", json=doc)
+
+    def make_run(name, t1, t2, x1):
+        rid = client.post(f"/api/stages/{sid}/rehearsals",
+                          json={"scene_id": "sc1", "name": name}).get_json()["id"]
+        marks = []
+        marks.append({"id": f"{rid}-bm1", "beat_id": "b1", "actual_time": t1, "note": ""})
+        marks.append({"id": f"{rid}-bm2", "beat_id": "b2", "actual_time": t2, "note": ""})
+        am = []
+        for aid, t, x in (("a1", t1, x1), ("a2", t1, None)):
+            am.append({"id": f"{rid}-{aid}1", "beat_id": "b1", "actor_id": aid,
+                       "actual_time": t, "x": x, "y": 4.0 if x is not None else None,
+                       "absent": 0, "note": ""})
+        client.put(f"/api/rehearsals/{rid}", json={
+            "name": name, "notes": "", "status": "finished",
+            "clock_elapsed": 5, "clock_running": False, "clock_at": None,
+            "beat_marks": marks, "actor_marks": am})
+        return rid
+
+    r1 = make_run("第一次", 1.5, 2.0, 2.0)   # 甲连续迟到、走位偏移 1m
+    r2 = make_run("第二次", 1.8, 2.2, 2.1)
+    cmp_ = client.get(f"/api/stages/{sid}/rehearsals/compare?a={r1}&b={r2}").get_json()
+    assert any(x["name"] == "节点1" for x in cmp_["recurring_time"])
+    assert any(x["actor_name"] == "甲" and x["beat_name"] == "节点1"
+               for x in cmp_["recurring_pos"])
+    # 比较复盘单也可打印
+    assert client.get(f"/print/rehearsals/{r1}/review?compare={r2}").status_code == 200
+
+
+def test_rehearsal_snapshot_independent(client):
+    """排练创建后修改原方案不影响快照。"""
+    sid = client.post("/api/stages", json={"name": "快照台"}).get_json()["stage"]["id"]
+    doc = _rehearsal_doc(sid)
+    client.put(f"/api/stages/{sid}", json=doc)
+    rid = client.post(f"/api/stages/{sid}/rehearsals",
+                      json={"scene_id": "sc1"}).get_json()["id"]
+    # 原方案改名、改节点时间（保留完整子表避免外键约束）
+    doc["stage"]["name"] = "改名后的舞台"
+    next(b for b in doc["beats"] if b["id"] == "b1")["time"] = 42.0
+    client.put(f"/api/stages/{sid}", json=doc)
+    rec = client.get(f"/api/rehearsals/{rid}").get_json()
+    assert rec["snapshot"]["stage"]["name"] == "测试舞台"
+    assert next(b for b in rec["snapshot"]["beats"] if b["id"] == "b1")["time"] == 0.0

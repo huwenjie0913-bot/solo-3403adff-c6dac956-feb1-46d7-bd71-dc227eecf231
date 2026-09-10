@@ -178,6 +178,11 @@ ul.rv-actorlist { list-style: none; margin: 0; padding: 0; }
 .rv-beatlist li.early { border-left: 3px solid #2f6fb3; }
 .rv-beatlist li.miss { border-left: 3px solid #e0a32e; }
 .rv-beatlist li.sel { background: #dcebfb; }
+.rv-beatlist li { justify-content: space-between; }
+.rv-beatlist .nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rv-beatlist .v, .rv-actorlist .v { font-variant-numeric: tabular-nums; font-size: 10px; color: #5a6a7c; }
+.rv-beatlist .absent { color: #777; font-size: 10px; }
+.rv-beatlist .miss { color: #9a6a00; font-size: 10px; }
 .rv-curbeat { font-weight: 400; font-size: 11px; color: #2f6fb3; }
 
 ul.rv-difflist { list-style: none; margin: 0; padding: 0; }
