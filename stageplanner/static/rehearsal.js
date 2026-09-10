@@ -339,7 +339,7 @@ let rhView = null;
 let rhTicker = null;
 let rhSaving = false;
 let rhSaveQueued = false;
-let rhSaveSeq = 0;            // 单调递增：只有最新一次保存的回包才允许回写
+let rhLocalRev = 0;         // 本地打点数据版本：每次有本地改动 +1
 const rhSave = debounce(() => saveRehearsal(), 800);
 
 function rhClockNow() {
@@ -863,21 +863,25 @@ function buildRhPayload() {
   };
 }
 function scheduleRhSave() {
+  rhLocalRev++;          // 本地有新改动，任何在途的保存响应都已过期
+  rhSaveQueued = true;   // 若有 PUT 正在飞行，结束后立即补发一次
   rhSave();
 }
 async function saveRehearsal() {
   if (!R) return;
   if (rhSaving) { rhSaveQueued = true; return; }
   rhSaving = true;
-  const seq = ++rhSaveSeq;
+  const rev = rhLocalRev;
+  const rid = R.id;
   try {
     const payload = buildRhPayload();
     // 本地时钟基准在等待期间继续走
     R.clock_elapsed = payload.clock_elapsed;
     R.clock_at = payload.clock_running ? nowIso() : null;
-    const saved = await api(`/api/rehearsals/${R.id}`, { method: 'PUT', body: JSON.stringify(payload) });
-    // 只有最新一次保存可以回写，避免慢响应覆盖更新的本地打点
-    if (seq === rhSaveSeq && R) {
+    const saved = await api(`/api/rehearsals/${rid}`, { method: 'PUT', body: JSON.stringify(payload) });
+    // 仅当请求期间本地打点没有再变化、且仍停留在同一条排练时，才用回包同步；
+    // 否则在途期间新增/删除的打点会被旧响应覆盖（排队补发会携带最新数据）。
+    if (R && R.id === rid && rev === rhLocalRev) {
       R.beat_marks = saved.beat_marks;
       R.actor_marks = saved.actor_marks;
     }
@@ -885,7 +889,10 @@ async function saveRehearsal() {
     flashRhStatus('保存失败：' + e.message);
   } finally {
     rhSaving = false;
-    if (rhSaveQueued) { rhSaveQueued = false; rhSave(); }
+    if (rhSaveQueued && R && R.id === rid) {
+      rhSaveQueued = false;
+      saveRehearsal();     // 立即用最新本地状态补发，不再等 800ms 防抖
+    }
   }
 }
 
@@ -1137,7 +1144,16 @@ function seekToBeat(beatId, t) {
 }
 
 function rvTimeRange() {
-  const ts = rvBeats().map((b) => b.planned);
+  // 范围必须同时覆盖计划时刻与实测时刻（实测可能大幅晚于末节点计划时间）
+  const ts = [];
+  for (const b of rvBeats()) {
+    ts.push(b.planned);
+    if (b.actual !== null && b.actual !== undefined) ts.push(b.actual);
+    for (const a of b.actors) {
+      if (a.actual_time !== null && a.actual_time !== undefined) ts.push(a.actual_time);
+    }
+  }
+  if (!ts.length) return [0, 1];
   return [Math.min(0, ...ts), Math.max(...ts, 1)];
 }
 

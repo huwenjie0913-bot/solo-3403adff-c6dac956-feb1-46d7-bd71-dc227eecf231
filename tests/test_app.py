@@ -1,6 +1,9 @@
 """端到端冒烟测试：应用工厂、首页、文档保存、问题分析、打印路由。"""
+import glob
 import json
 import os
+import shutil
+import subprocess
 import sys
 
 import pytest
@@ -265,3 +268,12 @@ def test_rehearsal_snapshot_independent(client):
     rec = client.get(f"/api/rehearsals/{rid}").get_json()
     assert rec["snapshot"]["stage"]["name"] == "测试舞台"
     assert next(b for b in rec["snapshot"]["beats"] if b["id"] == "b1")["time"] == 0.0
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="环境中没有 Node")
+@pytest.mark.parametrize("script", sorted(glob.glob(
+    os.path.join(os.path.dirname(__file__), "js", "*.js"))))
+def test_rehearsal_js_regression(script):
+    """tests/js 下的无界面回归：排练异步保存、复盘时间范围等。"""
+    rv = subprocess.run(["node", script], capture_output=True, text=True)
+    assert rv.returncode == 0, rv.stdout + rv.stderr
