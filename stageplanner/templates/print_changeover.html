@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>换景单 - {{ d.stage.name }}</title>
+<style>
+  @page { size: A4 landscape; margin: 9mm; }
+  body { font-family: "PingFang SC", "Microsoft YaHei", sans-serif; color: #222; font-size: 11px; }
+  h1 { font-size: 19px; margin: 0 0 2px; }
+  h2 { font-size: 15px; margin: 18px 0 6px; padding: 4px 8px; background: #f1ecf8; border-left: 4px solid #8a5cc4; page-break-after: avoid; }
+  .sub { color: #666; margin-bottom: 10px; }
+  .toolbar { margin-bottom: 8px; }
+  .toolbar button { padding: 6px 16px; font-size: 13px; cursor: pointer; }
+  @media print { .toolbar { display: none; } body { font-size: 10px; } .sheet { page-break-after: always; } }
+
+  .meta { display: flex; gap: 18px; flex-wrap: wrap; margin: 4px 0 8px; color: #444; }
+  .meta b { color: #222; }
+  .badline { color: #c63732; font-weight: 700; margin: 4px 0; }
+
+  .crewblock { margin-bottom: 12px; page-break-inside: avoid; border: 1px solid #c8d2dc; border-radius: 5px; padding: 6px 10px; }
+  .crewhead { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .swatch { width: 13px; height: 13px; border-radius: 3px; display: inline-block; }
+  .crewhead .nm { font-size: 13px; font-weight: 700; }
+  .crewhead .v { color: #666; font-size: 10px; }
+  table { border-collapse: collapse; width: 100%; font-size: 10px; }
+  th, td { border: 1px solid #d5dde6; padding: 3px 6px; text-align: left; }
+  th { background: #eef3f8; font-weight: 600; }
+  td.t, th.t { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .k { padding: 0 6px; border-radius: 8px; color: #fff; font-size: 9px; white-space: nowrap; }
+  tr.bad td { background: #fdeceb; }
+
+  .content { display: flex; gap: 14px; align-items: flex-start; }
+  .routemap { flex: 0 0 380px; }
+  .nodes { flex: 1; }
+  svg { display: block; border: 1px solid #ccd6e0; background: #fbf7ee; }
+  .legend { font-size: 10px; color: #555; margin-top: 3px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .pl { list-style: none; margin: 0; padding: 0; }
+  .pl li { padding: 3px 6px; border-bottom: 1px dotted #d5dde6; font-size: 10px; display: flex; gap: 8px; }
+  .pl li .t { font-variant-numeric: tabular-nums; color: #2f6fb3; font-weight: 700; min-width: 92px; }
+  .warns { color: #c63732; margin: 4px 0 0 16px; font-size: 10px; }
+</style>
+</head>
+<body>
+{% set W = d.stage.width %}{% set H = d.stage.height %}
+{% set KIND_LABEL = {'strike':'撤场','move':'搬运','preset':'预置','handover':'交接'} %}
+{% set KIND_COLOR = {'strike':'#e07b39','move':'#8a5cc4','preset':'#3f9d6b','handover':'#5e8fd6'} %}
+{% set props_by_id = {} %}
+{% for p in d.props %}{% set _ = props_by_id.update({p.id: p}) %}{% endfor %}
+{% set crews_by_id = {} %}
+{% for c in d.crews %}{% set _ = crews_by_id.update({c.id: c}) %}{% endfor %}
+{% set gates_by_id = {} %}
+{% for g in d.gates %}{% set _ = gates_by_id.update({g.id: g}) %}{% endfor %}
+
+<div class="toolbar"><button onclick="window.print()">打印 / 导出 PDF</button></div>
+<h1>换景调度单 · {{ d.stage.name }}</h1>
+<div class="sub">{{ W }}m × {{ H }}m · {{ d.shifts | length }} 个换景 · {{ d.crews | length }} 个搬运组 · {{ d.props | length }} 件可移动布景/道具</div>
+
+{% macro stage_map(sheet, crew_entries) %}
+{% set sw = 380 %}{% set sc = sw / W %}{% set sh = H * sc %}
+<svg width="{{ sw }}" height="{{ sh }}" viewBox="-2 -2 {{ W + 4 }} {{ H + 4 }}">
+  <defs>
+    <pattern id="hatch" patternUnits="userSpaceOnUse" width="0.25" height="0.25" patternTransform="rotate(45)">
+      <line x1="0" y1="0" x2="0" y2="0.25" stroke="rgba(181,56,52,.6)" stroke-width="0.03"/>
+    </pattern>
+  </defs>
+  <rect x="0" y="0" width="{{ W }}" height="{{ H }}" fill="#fbf7ee" stroke="#33414f" stroke-width="0.06"/>
+  {% for x in range(1, W | int) %}<line x1="{{ x }}" y1="0" x2="{{ x }}" y2="{{ H }}" stroke="#e7e0d2" stroke-width="0.015"/>{% endfor %}
+  {% for y in range(1, H | int) %}<line x1="0" y1="{{ y }}" x2="{{ W }}" y2="{{ y }}" stroke="#e7e0d2" stroke-width="0.015"/>{% endfor %}
+  {% for r in d.regions %}
+  <polygon points="{{ r.points | map('join', ',') | map('string') | join(' ') }}"
+    fill="{{ '#d9534f' if r.kind == 'obstacle' else r.color }}" fill-opacity="{{ '0.28' if r.kind == 'obstacle' else '0.18' }}"
+    stroke="{{ '#b53834' if r.kind == 'obstacle' else '#2f6fb3' }}" stroke-width="0.04"/>
+  {% if r.kind == 'obstacle' %}<polygon points="{{ r.points | map('join', ',') | map('string') | join(' ') }}" fill="url(#hatch)"/>{% endif %}
+  {% endfor %}
+  {% for g in d.gates %}
+  <rect x="{{ g.x - 0.22 }}" y="{{ g.y - 0.22 }}" width="0.44" height="0.44" transform="rotate(45 {{ g.x }} {{ g.y }})"
+    fill="#f2c66d" stroke="#8a6d1f" stroke-width="0.04"/>
+  <text x="{{ g.x }}" y="{{ g.y - 0.42 }}" font-size="0.28" fill="#5a4a10" text-anchor="middle">{{ g.name }}</text>
+  {% endfor %}
+  {# 本组涉及操作的路线（交接操作在两组都出现） #}
+  {% for entry in crew_entries %}
+  {% set eps = sheet.eps.get(entry.op_id) %}
+  {% if eps and eps.pts | length >= 2 %}
+  <polyline points="{{ eps.pts | map('join', ',') | map('string') | join(' ') }}"
+    fill="none" stroke="{{ KIND_COLOR.get(entry.kind, '#888') }}" stroke-width="0.07"
+    stroke-dasharray="{{ '0.6 0.35' if entry.kind == 'handover' else 'none' }}" stroke-linecap="round" opacity="0.9"/>
+  <circle cx="{{ eps.start[0] if eps.start else eps.pts[0][0] }}" cy="{{ eps.start[1] if eps.start else eps.pts[0][1] }}" r="0.12" fill="none" stroke="{{ KIND_COLOR.get(entry.kind, '#888') }}" stroke-width="0.05"/>
+  <circle cx="{{ eps.end[0] if eps.end else eps.pts[-1][0] }}" cy="{{ eps.end[1] if eps.end else eps.pts[-1][1] }}" r="0.12" fill="{{ KIND_COLOR.get(entry.kind, '#888') }}"/>
+  {% endif %}
+  {% endfor %}
+  {# 收场位（橙虚影）与开场位（绿实影）矩形 #}
+  {% for q in d.set_positions %}
+  {% if q.x is not none and (q.scene_id == sheet.shift.from_scene_id or q.scene_id == sheet.shift.to_scene_id) %}
+  {% set pp = props_by_id.get(q.prop_id) %}
+  {% if pp %}
+  <rect x="{{ q.x - pp.w / 2 }}" y="{{ q.y - pp.h / 2 }}" width="{{ pp.w }}" height="{{ pp.h }}"
+    fill="{{ '#3f9d6b' if q.kind == 'open' else '#e07b39' }}"
+    fill-opacity="{{ '0.22' if q.kind == 'open' else '0.12' }}"
+    stroke="{{ '#2c7a52' if q.kind == 'open' else '#b05e22' }}" stroke-width="0.04"
+    stroke-dasharray="{{ 'none' if q.kind == 'open' else '0.3 0.2' }}"/>
+  <text x="{{ q.x }}" y="{{ q.y + 0.1 }}" font-size="0.26" fill="#23303d" text-anchor="middle">{{ pp.name }}</text>
+  {% endif %}
+  {% endif %}
+  {% endfor %}
+</svg>
+<div class="legend">
+  <span><i class="k" style="background:#e07b39">撤场</i></span>
+  <span><i class="k" style="background:#8a5cc4">搬运</i></span>
+  <span><i class="k" style="background:#3f9d6b">预置</i></span>
+  <span><i class="k" style="background:#5e8fd6">交接</i></span>
+  <span>橙虚线框=收场位，绿框=开场位，黄菱形=出入口，红斜线=固定障碍</span>
+</div>
+{% endmacro %}
+
+{% for sheet in cp.sheets %}
+<section class="sheet">
+  <h2>🔀 {{ sheet.shift.name or (sheet.res.from_scene ~ ' → ' ~ sheet.res.to_scene) }}
+    <span style="font-weight:400;font-size:11px;color:#666;">
+      「{{ sheet.res.from_scene }}」收场 → 「{{ sheet.res.to_scene }}」开场 ·
+      时限 <b>{{ '%.0f'|format(sheet.res.deadline) }}s</b> · 排程总用时
+      <b style="{{ 'color:#c63732' if sheet.res.makespan > sheet.res.deadline }}">{{ '%.1f'|format(sheet.res.makespan) }}s</b>
+    </span>
+  </h2>
+  {% if sheet.problems %}
+  <div class="badline">⚠ {{ sheet.problems | length }} 个待处理问题：</div>
+  <ul class="warns">
+    {% for p in sheet.problems[:8] %}<li>{{ p.message }}</li>{% endfor %}
+    {% if sheet.problems | length > 8 %}<li>…等 {{ sheet.problems | length }} 个问题，详见应用内问题清单</li>{% endif %}
+  </ul>
+  {% endif %}
+
+  {% for crew in sheet.crews %}
+  <div class="crewblock">
+    <div class="crewhead">
+      <span class="swatch" style="background:{{ crew.color }}"></span>
+      <span class="nm">{{ crew.name }}</span>
+      <span class="v">{{ crew.members }} 人{% if crew.win_start is not none %} · 可用时段 {{ '%.0f'|format(crew.win_start) }}–{{ '%.0f'|format(crew.win_end) }}s{% endif %}</span>
+    </div>
+    <div class="content">
+      <div class="routemap">{{ stage_map(sheet, crew.entries) }}</div>
+      <div class="nodes">
+        <table>
+          <thead><tr>
+            <th>序</th><th>操作</th><th>物件</th><th class="t">开始</th><th class="t">结束</th>
+            <th class="t">用时</th><th class="t">路线</th><th class="t">人数</th><th>协作/交接</th>
+          </tr></thead>
+          <tbody>
+          {% for e in crew.entries %}
+          {% if e.start is not none and not e.unscheduled %}
+          <tr>
+            <td>{{ loop.index }}</td>
+            <td><span class="k" style="background:{{ KIND_COLOR.get(e.kind, '#888') }}">{{ KIND_LABEL.get(e.kind, e.kind) }}</span>
+              {% if e.locked %}🔒{% endif %}</td>
+            <td>{{ e.prop_name }}</td>
+            <td class="t">{{ '%.1f'|format(e.start) }}s</td>
+            <td class="t">{{ '%.1f'|format(e.finish) }}s</td>
+            <td class="t">{{ '%.1f'|format(e.duration) }}s</td>
+            <td class="t">{{ '%.1f'|format(e.length) }}m</td>
+            <td class="t">{{ e.demand }}</td>
+            <td>{% if e.kind == 'handover' %}{% if e.crew_id == crew.crew_id %}交接给 {{ e.handover_crew_name }}（{{ '%.1f'|format(e.handover_time) }}s）{% else %}由 {{ e.crew_name }} 交入（{{ '%.1f'|format(e.handover_time) }}s）{% endif %}{% else %}—{% endif %}</td>
+          </tr>
+          {% endif %}
+          {% endfor %}
+          </tbody>
+        </table>
+        <ul class="pl" style="margin-top:5px">
+          {% set ns = namespace(li=0) %}
+          {% for e in crew.entries %}
+          {% if e.start is not none and not e.unscheduled %}
+          {% set ns.li = ns.li + 1 %}
+          <li><span class="t">{{ '%05.1f'|format(e.start) }}s</span>
+            <span>{{ KIND_LABEL.get(e.kind, e.kind) }}「{{ e.prop_name }}」开始{% if e.kind == 'handover' and e.crew_id == crew.crew_id %}，{{ '%.1f'|format(e.handover_time) }}s 与「{{ e.handover_crew_name }}」交接{% endif %}</span></li>
+          <li><span class="t">{{ '%05.1f'|format(e.finish) }}s</span><span>「{{ e.prop_name }}」到位{% if e.finish > sheet.res.deadline %} <b style="color:#c63732">（超出时限）</b>{% endif %}</span></li>
+          {% endif %}
+          {% endfor %}
+          {% if ns.li == 0 %}<li class="muted" style="color:#888">本组在本换景中没有可排程任务（可能未指派/配置不完整）。</li>{% endif %}
+        </ul>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</section>
+{% else %}
+<p>当前舞台还没有换景。请在应用的「换景调度」标签页中为相邻场景新建换景。</p>
+{% endfor %}
+</body>
+</html>

@@ -14,6 +14,7 @@
       <button type="button" data-mode="plan" class="mtab active">编排</button>
       <button type="button" data-mode="rehearse" class="mtab">排练实录</button>
       <button type="button" data-mode="review" class="mtab">复盘</button>
+      <button type="button" data-mode="changeover" class="mtab">换景调度</button>
     </div>
     <select id="stageSelect" title="切换舞台"></select>
     <button id="newStageBtn" type="button">新建舞台</button>
@@ -26,6 +27,7 @@
     <button id="printCuesBtn" type="button" class="plan-only">🖨 演员提示单</button>
     <button id="printOverviewBtn" type="button" class="plan-only">🖨 可打印总览</button>
     <button id="printReviewBtn" type="button" class="review-only hidden">🖨 复盘单</button>
+    <button id="printChangeoverBtn" type="button" class="co-only hidden">🖨 换景单</button>
     <button id="saveBtn" type="button" class="primary plan-only">保存</button>
     <span id="saveState"></span>
   </header>
@@ -267,9 +269,104 @@
       </aside>
     </div>
   </div>
+
+  <!-- ============================================================ 换景调度 -->
+  <div id="changeoverView" class="modeView hidden">
+    <div class="co-main">
+      <aside class="co-side">
+        <section class="panel">
+          <h3>换景（相邻场景）
+            <button type="button" id="coAddShiftBtn" class="mini">+ 新建换景</button>
+          </h3>
+          <ul id="coShiftList" class="co-shiftlist"></ul>
+          <div id="coShiftMeta" class="hidden">
+            <label>名称 <input id="coShiftName" type="text" placeholder="如：一、二幕之间"></label>
+            <div class="grid2">
+              <label>时限(s) <input id="coDeadline" type="number" min="1" step="1"></label>
+              <label>总用时 <input id="coMakespan" type="text" readonly></label>
+            </div>
+          </div>
+        </section>
+        <section class="panel">
+          <h3>搬运组 <button type="button" id="coAddCrewBtn" class="mini">+ 添加组</button></h3>
+          <ul id="coCrewList" class="co-crewlist"></ul>
+        </section>
+        <section class="panel">
+          <h3>布景 / 道具 <button type="button" id="coAddPropBtn" class="mini">+ 添加物件</button></h3>
+          <ul id="coPropList" class="co-proplist"></ul>
+          <div class="hint">拖动物件标记可调整收场位/开场位；出入口在台边显示为黄色菱形，可在物件属性中勾选允许出入口。</div>
+        </section>
+      </aside>
+
+      <main class="co-center">
+        <div class="co-toolbar">
+          <div class="co-tools" id="coTools">
+            <button type="button" data-ctool="select" class="active">选择/拖动</button>
+            <button type="button" data-ctool="close">收场位</button>
+            <button type="button" data-ctool="open">开场位</button>
+            <button type="button" data-ctool="route">编辑路线</button>
+            <button type="button" data-ctool="gate">出入口</button>
+          </div>
+          <div class="co-toolright">
+            <label class="co-phase"><input type="radio" name="coPhase" value="close" checked> 收场（上一场末）</label>
+            <label class="co-phase"><input type="radio" name="coPhase" value="open"> 开场（下一场初）</label>
+            <span id="coToolHint" class="co-toolhint">选择/拖动：拖动物件矩形调整位置，拖路线锚点改路线。</span>
+          </div>
+        </div>
+        <div id="coCanvasWrap" class="co-canvaswrap">
+          <canvas id="coCanvas"></canvas>
+          <div class="co-zoom">
+            <button type="button" id="coZoomOut">－</button>
+            <button type="button" id="coZoomIn">＋</button>
+            <button type="button" id="coZoomFit">适应</button>
+          </div>
+          <div class="co-legend">
+            <span><i class="co-lg-close"></i>收场位</span>
+            <span><i class="co-lg-open"></i>开场位</span>
+            <span><i class="co-lg-gate"></i>出入口</span>
+            <span><i class="co-lg-store"></i>侧台存放</span>
+            <span><i class="co-lg-bad"></i>问题路线</span>
+          </div>
+        </div>
+        <div class="co-timelinewrap">
+          <div class="co-tl-controls">
+            <button type="button" id="coPlayBtn">▶</button>
+            <input id="coScrub" type="range" min="0" max="1000" value="0">
+            <span id="coTimeLabel">0.0s</span>
+            <span id="coDeadlineLabel" class="co-deadline"></span>
+            <span class="co-tl-hint">横轴为换景开始后的秒数；点击操作块选中，拖动可调整先后顺序（重排），🔒 为锁定操作。</span>
+          </div>
+          <div id="coTimeline" class="co-timeline"></div>
+        </div>
+      </main>
+
+      <aside class="co-side co-side-r">
+        <section class="panel">
+          <h3>操作
+            <span class="co-opbtns">
+              <button type="button" id="coAddStrikeBtn" class="mini" title="撤场：台上 → 侧台">撤场</button>
+              <button type="button" id="coAddMoveBtn" class="mini" title="搬运：台上 → 台上">搬运</button>
+              <button type="button" id="coAddPresetBtn" class="mini" title="预置：侧台 → 台上">预置</button>
+              <button type="button" id="coAddHandoverBtn" class="mini" title="交接：两组在路线中点交接">交接</button>
+            </span>
+          </h3>
+          <ul id="coOpList" class="co-oplist"></ul>
+        </section>
+        <section class="panel problems">
+          <h3>问题清单 <span id="coProblemCount" class="badge">0</span></h3>
+          <ul id="coProblemList"></ul>
+        </section>
+        <section class="panel" id="coInspectorPanel">
+          <h3>属性</h3>
+          <div id="coInspector"><p class="muted">未选中任何对象</p></div>
+        </section>
+      </aside>
+    </div>
+  </div>
 </div>
 <script>window.INITIAL_STAGE_ID = {{ (current.id if current else '')|tojson }};</script>
 <script src="{{ url_for('static', filename='app.js') }}"></script>
 <script src="{{ url_for('static', filename='rehearsal.js') }}"></script>
+<script src="{{ url_for('static', filename='changeover.js') }}"></script>
 </body>
 </html>

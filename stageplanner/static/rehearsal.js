@@ -305,15 +305,19 @@ function setMode(next) {
   r$('#planView').classList.toggle('hidden', next !== 'plan');
   r$('#rehearseView').classList.toggle('hidden', next !== 'rehearse');
   r$('#reviewView').classList.toggle('hidden', next !== 'review');
+  const coView = document.getElementById('changeoverView');
+  if (coView) coView.classList.toggle('hidden', next !== 'changeover');
   document.querySelectorAll('.plan-only').forEach((el) => el.classList.toggle('hidden', next !== 'plan'));
+  document.querySelectorAll('.co-only').forEach((el) => el.classList.toggle('hidden', next !== 'changeover'));
   r$('#printReviewBtn').classList.toggle('hidden', next !== 'review');
   if (next === 'plan') {
     window.dispatchEvent(new Event('resize'));
   } else if (next === 'rehearse') {
     enterRehearseMode();
-  } else {
+  } else if (next === 'review') {
     enterReviewMode();
   }
+  // 换景模式由 changeover.js 监听同一批按钮自行进入
 }
 
 function requireDoc(alertMsg) {

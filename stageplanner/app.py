@@ -8,6 +8,7 @@ from flask import Flask, abort, jsonify, render_template, request
 
 from . import db
 from .analysis import analyze_document, build_print_data
+from .changeover import analyze_changeover, build_changeover_print
 from .review import (
     build_review, build_review_print, compare_reviews, promote_to_document,
     snapshot_doc,
@@ -59,6 +60,8 @@ def create_app(db_path=None, testing=False):
                       "width": width, "height": height},
             "regions": [], "actors": [], "scenes": [],
             "beats": [], "placements": [], "paths": [],
+            "crews": [], "props": [], "gates": [], "set_positions": [],
+            "shifts": [], "shift_ops": [], "shift_deps": [],
         }
         saved = db.save_document(doc)
         return jsonify(_serialize(saved)), 201
@@ -99,6 +102,22 @@ def create_app(db_path=None, testing=False):
         if doc is None:
             return jsonify(error="舞台不存在"), 404
         return jsonify(analyze_document(_serialize(doc)))
+
+    @app.get("/api/stages/<stage_id>/changeover")
+    def stage_changeover(stage_id):
+        doc = db.get_stage(stage_id)
+        if doc is None:
+            return jsonify(error="舞台不存在"), 404
+        return jsonify(analyze_changeover(_serialize(doc)))
+
+    @app.get("/print/stages/<stage_id>/changeover")
+    def print_changeover(stage_id):
+        doc = db.get_stage(stage_id)
+        if doc is None:
+            abort(404)
+        payload = _serialize(doc)
+        cp = build_changeover_print(payload)
+        return render_template("print_changeover.html", d=payload, cp=cp)
 
     # ----------------------------------------------------- 排练实录 / 复盘
     @app.get("/api/stages/<stage_id>/rehearsals")
@@ -269,6 +288,8 @@ def _serialize(doc):
     for key in ("regions",):
         out[key] = [{**r, "points": json.loads(r["points"])} for r in out[key]]
     out["paths"] = [{**p, "points": json.loads(p["points"])} for p in out["paths"]]
+    out["props"] = [{**p, "gates": json.loads(p["gates"])} for p in out["props"]]
+    out["shift_ops"] = [{**o, "route": json.loads(o["route"])} for o in out["shift_ops"]]
     return out
 
 
@@ -321,7 +342,9 @@ def _valid_document(data, stage_id):
         float(st["width"]); float(st["height"])
     except (KeyError, TypeError, ValueError):
         return False
-    for key in ("regions", "actors", "scenes", "beats", "placements", "paths"):
+    for key in ("regions", "actors", "scenes", "beats", "placements", "paths",
+                "crews", "props", "gates", "set_positions", "shifts",
+                "shift_ops", "shift_deps"):
         if not isinstance(data.get(key, []), list):
             return False
     return True

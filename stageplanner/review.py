@@ -251,7 +251,9 @@ def promote_to_document(stage, snap, scene_id, selections):
     doc = copy.deepcopy(snap)
     new_id = uuid.uuid4().hex
     idmap = {}
-    for table in ("regions", "actors", "scenes", "beats", "placements", "paths"):
+    for table in ("regions", "actors", "scenes", "beats", "placements", "paths",
+                  "crews", "props", "gates", "set_positions", "shifts",
+                  "shift_ops", "shift_deps"):
         for row in doc.get(table, []):
             idmap[row["id"]] = uuid.uuid4().hex
             row["id"] = idmap[row["id"]]
@@ -272,6 +274,23 @@ def promote_to_document(stage, snap, scene_id, selections):
         p["from_beat_id"] = idmap.get(p["from_beat_id"], p["from_beat_id"])
         p["to_beat_id"] = idmap.get(p["to_beat_id"], p["to_beat_id"])
         p["actor_id"] = idmap.get(p["actor_id"], p["actor_id"])
+
+    # 换景调度表的外键重映射（指向已重新生成 id 的场景/物件/组/操作）
+    def remap(row, *fields):
+        for f in fields:
+            if row.get(f):
+                row[f] = idmap.get(row[f], row[f])
+
+    for row in doc.get("gates", []):
+        pass
+    for row in doc.get("set_positions", []):
+        remap(row, "prop_id", "scene_id")
+    for row in doc.get("shifts", []):
+        remap(row, "from_scene_id", "to_scene_id")
+    for row in doc.get("shift_ops", []):
+        remap(row, "shift_id", "prop_id", "crew_id", "handover_crew")
+    for row in doc.get("shift_deps", []):
+        remap(row, "shift_id", "op_id", "depends_on")
 
     # selections 中的 id 是快照 id
     origin = float(selections.get("origin", 0))

@@ -1415,6 +1415,8 @@ function afterLoad() {
   refresh();
   const [t0, t1] = timeRange();
   $('#timeScrub').value = 0; $('#timeLabel').textContent = t0.toFixed(1) + 's';
+  // 通知换景模块（新建舞台/切换舞台/保存后均经过这里）
+  document.dispatchEvent(new CustomEvent('co:stageChanged', { detail: doc }));
 }
 async function newStage() {
   const name = prompt('舞台名称', `舞台 ${stages.length + 1}`);
