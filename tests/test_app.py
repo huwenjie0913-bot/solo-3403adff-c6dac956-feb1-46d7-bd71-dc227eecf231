@@ -270,10 +270,130 @@ def test_rehearsal_snapshot_independent(client):
     assert next(b for b in rec["snapshot"]["beats"] if b["id"] == "b1")["time"] == 0.0
 
 
+# ---------------------------------------------------------------- 换景调度
+def _changeover_doc(sid="s1"):
+    return {
+        "stage": {"id": sid, "name": "换景台", "width": 12.0, "height": 8.0},
+        "regions": [], "actors": [],
+        "scenes": [{"id": "sc1", "stage_id": sid, "name": "一幕", "position": 0},
+                   {"id": "sc2", "stage_id": sid, "name": "二幕", "position": 1}],
+        "beats": [], "placements": [], "paths": [],
+        "crews": [{"id": "c1", "stage_id": sid, "name": "搬运组", "members": 3,
+                   "win_start": 0, "win_end": 600, "color": "#3f8fdd", "position": 0}],
+        "gates": [{"id": "g1", "stage_id": sid, "name": "左台口", "x": 0.0, "y": 4.0, "position": 0}],
+        "props": [
+            {"id": "p1", "stage_id": sid, "name": "重台", "w": 2.0, "h": 1.0, "weight": 120,
+             "min_crew": 3, "speed": 1.0, "storage": "SL", "gates": ["g1"],
+             "color": "#c98a3a", "position": 0},
+            {"id": "p2", "stage_id": sid, "name": "小凳", "w": 0.6, "h": 0.6, "weight": 5,
+             "min_crew": 1, "speed": 1.0, "storage": "SL", "gates": ["g1"],
+             "color": "#9b6dd3", "position": 1},
+        ],
+        "set_positions": [
+            {"id": "q1", "stage_id": sid, "prop_id": "p1", "scene_id": "sc1", "kind": "close", "x": 4.0, "y": 4.0},
+            {"id": "q2", "stage_id": sid, "prop_id": "p1", "scene_id": "sc2", "kind": "open", "x": None, "y": None},
+            {"id": "q3", "stage_id": sid, "prop_id": "p2", "scene_id": "sc1", "kind": "close", "x": 8.0, "y": 2.0},
+            {"id": "q4", "stage_id": sid, "prop_id": "p2", "scene_id": "sc2", "kind": "open", "x": None, "y": None},
+        ],
+        "shifts": [{"id": "sh1", "stage_id": sid, "from_scene_id": "sc1", "to_scene_id": "sc2",
+                    "name": "一二幕之间", "deadline": 120, "position": 0}],
+        "shift_ops": [
+            {"id": "o1", "stage_id": sid, "shift_id": "sh1", "prop_id": "p1", "kind": "strike",
+             "crew_id": "c1", "handover_crew": None, "demands": None, "locked_start": None,
+             "order_hint": 0, "route": [], "position": 0},
+            {"id": "o2", "stage_id": sid, "shift_id": "sh1", "prop_id": "p2", "kind": "strike",
+             "crew_id": "c1", "handover_crew": None, "demands": None, "locked_start": None,
+             "order_hint": 1, "route": [], "position": 1},
+        ],
+        "shift_deps": [],
+    }
+
+
+def _op(sh, prop_name):
+    return next(o for o in sh["ops"] if o["prop_name"] == prop_name)
+
+
+def _save_co_doc(client, doc):
+    # POST 生成舞台（随机 id），随后把文档中的固定 id 替换为新建 id
+    sid = client.post("/api/stages", json={"name": doc["stage"]["name"],
+                                           "width": doc["stage"]["width"],
+                                           "height": doc["stage"]["height"]}).get_json()["stage"]["id"]
+    old = doc["stage"]["id"]
+    if old != sid:
+        for row in doc.get("scenes", []):
+            row["stage_id"] = sid
+        for row in doc.get("crews", []):
+            row["stage_id"] = sid
+        for row in doc.get("gates", []):
+            row["stage_id"] = sid
+        for row in doc.get("props", []):
+            row["stage_id"] = sid
+        for row in doc.get("set_positions", []):
+            row["stage_id"] = sid
+        for row in doc.get("shifts", []):
+            row["stage_id"] = sid
+        for row in doc.get("shift_ops", []):
+            row["stage_id"] = sid
+        for row in doc.get("shift_deps", []):
+            row["stage_id"] = sid
+    doc["stage"]["id"] = sid
+    rv = client.put(f"/api/stages/{sid}", json=doc)
+    assert rv.status_code == 200, rv.data
+    return client.get(f"/api/stages/{sid}/changeover").get_json()
+
+
+def test_changeover_crew_demand_accumulates(client):
+    """重台(3人)与小凳(1人)同组时不得重叠 0–10s，时间线须可串行执行。"""
+    from stageplanner.changeover import analyze_changeover
+    doc = _changeover_doc()
+    sh = analyze_changeover(doc)["shifts"][0]
+    table, stool = _op(sh, "重台"), _op(sh, "小凳")
+    assert table["demand"] == 3 and stool["demand"] == 1
+    assert table["start"] == 0.0
+    assert stool["start"] >= table["finish"] - 0.02, (table["finish"], stool["start"])
+    assert stool["finish"] > table["finish"]
+    assert not [p for p in sh["problems"] if p["type"] in ("overlap", "manpower")]
+
+    # 2+1=3 不超过容量时允许并行
+    doc["props"][0]["min_crew"] = 2
+    sh2 = analyze_changeover(doc)["shifts"][0]
+    assert _op(sh2, "小凳")["start"] == 0.0
+    assert not [p for p in sh2["problems"] if p["type"] == "overlap"]
+
+
+def test_changeover_win_start_and_future_locked(client):
+    """排程须遵守 win_start 下限并避让未来的锁定区间。"""
+    from stageplanner.changeover import analyze_changeover
+    doc = _changeover_doc()
+    doc["crews"][0]["win_start"] = 10
+    doc["shift_ops"][0]["locked_start"] = 20     # 重台锁定 20–25.5
+    sh = analyze_changeover(doc)["shifts"][0]
+    table, stool = _op(sh, "重台"), _op(sh, "小凳")
+    assert table["start"] == 20.0 and table["locked"]
+    assert stool["start"] >= 10.0 - 1e-9
+    assert stool["finish"] <= 20.0 + 0.02, (stool["start"], stool["finish"])
+    assert not [p for p in sh["problems"] if p["type"] in ("overlap", "window")]
+
+
+def test_changeover_persistence_and_print(client):
+    """换景数据整文档往返保存；打印路由 200 且含物件/换景名。"""
+    doc = _changeover_doc()
+    got = _save_co_doc(client, doc)
+    sid = doc["stage"]["id"]
+    sh = got["shifts"][0]
+    assert _op(sh, "小凳")["start"] >= _op(sh, "重台")["finish"] - 0.02
+    stored = client.get(f"/api/stages/{sid}").get_json()
+    assert stored["props"][0]["gates"] == ["g1"]
+    assert stored["shift_ops"][0]["route"] == []
+    page = client.get(f"/print/stages/{sid}/changeover")
+    assert page.status_code == 200
+    assert "重台".encode() in page.data and "一二幕之间".encode() in page.data
+
+
 @pytest.mark.skipif(shutil.which("node") is None, reason="环境中没有 Node")
 @pytest.mark.parametrize("script", sorted(glob.glob(
     os.path.join(os.path.dirname(__file__), "js", "*.js"))))
 def test_rehearsal_js_regression(script):
-    """tests/js 下的无界面回归：排练异步保存、复盘时间范围等。"""
+    """tests/js 下的无界面回归：排练异步保存、复盘时间范围、换景占用与出入口等。"""
     rv = subprocess.run(["node", script], capture_output=True, text=True)
     assert rv.returncode == 0, rv.stdout + rv.stderr

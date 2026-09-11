@@ -304,8 +304,9 @@ def _toposort(ops, pred_edges):
 
 # ================================================================ 排程
 def _crew_intervals(idx, shift_id, schedules):
-    """汇总某换景中各组已排操作的占用区间。
-    handover 在交出组为 [s, mid_t]，接收组为 [mid_t, f]；其余为整段。"""
+    """汇总某换景中各组已排操作的占用区间，区间带投用人数：
+    (start, finish, demand)。handover 在交出组为 [s, mid_t]，
+    接收组为 [mid_t, f]；其余为整段。"""
     out = {}
     for cid in idx["crews"]:
         out[cid] = []
@@ -313,33 +314,61 @@ def _crew_intervals(idx, shift_id, schedules):
         if row["shift_id"] != shift_id:
             continue
         op = row["op"]
-        s, f = row["start"], row["finish"]
+        s, f, dm = row["start"], row["finish"], row["demand"]
         cid = op.get("crew_id")
         if cid in out and op["kind"] != "handover":
-            out[cid].append((s, f))
+            out[cid].append((s, f, dm))
         if op["kind"] == "handover":
             mid = s + row["move_time"] / 2
             if cid in out:
-                out[cid].append((s, mid))
+                out[cid].append((s, mid, dm))
             hc = op.get("handover_crew")
             if hc in out:
-                out[hc].append((mid, f))
+                out[hc].append((mid, f, dm))
     return out
 
 
-def _crew_free_after(intervals, cid, demand, earliest, members):
-    """组 cid 在 [earliest, …] 内可用人力始终 ≥ demand 的最早时刻。"""
-    t = earliest
-    ivs = sorted(intervals.get(cid, []))
-    for _ in range(64):
-        if members - sum(1 for a, b in ivs if a <= t + 1e-9 < b) >= demand:
+def _active_demand(ivs, t):
+    """t 时刻正在进行的各区间 demand 之和（区间端点相接不算重叠）。"""
+    return sum(d for a, b, d in ivs if a <= t + 1e-9 < b)
+
+
+def _crew_free_after(intervals, cid, demand, earliest, members,
+                     duration=0.0, win_start=0.0):
+    """组 cid 从 earliest 起、可用人力始终 ≥ demand 的最早可开始时刻。
+
+    - 占用按各区间 demand 累计（非按区间条数），累计 + demand ≤ 组容量才可行；
+    - t 不早于该组可用时段起点 win_start；
+    - duration>0 时保证整段 [t, t+duration] 可行，即会避让未来的锁定区间
+      （放不下就让到阻挡区间结束之后）。
+    """
+    t = max(float(earliest), float(win_start))
+    ivs = intervals.get(cid, [])
+    for _ in range(256):
+        # 1) t 当前点：正在进行的占用 demand 之和必须留得下 demand
+        active = [(a, b) for a, b, _d in ivs if a <= t + 1e-9 < b]
+        if members - _active_demand(ivs, t) < demand:
+            ends = [b for _a, b in active]
+            if ends and min(ends) > t + 1e-9:
+                t = min(ends)
+                continue
             return t
-        # 跳到当前正在进行的占用中最早的释放时刻
-        ends = [b for a, b in ivs if a <= t + 1e-9 < b]
-        nxt = min(ends) if ends else None
-        if nxt is None or nxt <= t + 1e-9:
-            return t
-        t = nxt
+        # 2) 未来窗口 (t, t+duration]：按区间开始事件扫描容量，
+        #    首次超限时让到该时刻正在进行区间的最早结束点（可能插入中间空隙），再重检。
+        if duration > 1e-9:
+            f = t + duration
+            starts = sorted({a for a, b, _d in ivs if t + 1e-9 < a < f - 1e-9})
+            block_end = None
+            for e in starts:
+                if members - _active_demand(ivs, e) < demand:
+                    end_ev = [b for a, b, _d in ivs if a <= e + 1e-9 < b]
+                    if end_ev:
+                        block_end = min(end_ev)
+                    break
+            if block_end is not None and block_end > t + 1e-9:
+                t = block_end
+                continue
+        return t
     return t
 
 
@@ -401,17 +430,22 @@ def schedule_shift(idx, shift, ops_in, explicit_deps):
         if op["kind"] == "handover":
             hc = op.get("handover_crew")
             hcrew = idx["crews"].get(hc) if hc else None
+            win0 = float(crew.get("win_start", 0))
             if hcrew is None:
-                s = _crew_free_after(intervals, cid, demands[op_id], earliest, crew["members"])
+                s = _crew_free_after(intervals, cid, demands[op_id], earliest,
+                                     crew["members"], durations[op_id], win0)
             else:
                 d = durations[op_id]
                 move_time = max(1e-9, d - HANDOVER_PAUSE)
+                win0h = float(hcrew.get("win_start", 0))
                 # 交出组负责前半程 + 交接停顿，接收组负责后半程
-                s = earliest
+                s = max(earliest, win0)
                 for _ in range(48):
-                    sa = _crew_free_after(intervals, cid, demands[op_id], s, crew["members"])
+                    sa = _crew_free_after(intervals, cid, demands[op_id], s,
+                                          crew["members"], move_time / 2, win0)
                     sb = _crew_free_after(intervals, hc, demands[op_id],
-                                          sa + move_time / 2 + HANDOVER_PAUSE, hcrew["members"])
+                                          sa + move_time / 2 + HANDOVER_PAUSE,
+                                          hcrew["members"], move_time / 2, win0h)
                     if abs(sb - (sa + move_time / 2 + HANDOVER_PAUSE)) < 1e-9:
                         s = sa
                         break
@@ -420,7 +454,9 @@ def schedule_shift(idx, shift, ops_in, explicit_deps):
                         s = sa
                         break
         else:
-            s = _crew_free_after(intervals, cid, demands[op_id], earliest, crew["members"])
+            s = _crew_free_after(intervals, cid, demands[op_id], earliest,
+                                 crew["members"], durations[op_id],
+                                 float(crew.get("win_start", 0)))
         schedules[op_id] = _row(shift, op, endpoints[op_id], s, s + durations[op_id],
                                 durations[op_id], demands[op_id], locked=False)
         intervals = _crew_intervals(idx, shift["id"], list(schedules.values()))

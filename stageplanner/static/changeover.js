@@ -237,25 +237,49 @@ CE.crewIntervals = function (idx, shiftId, rows) {
   for (const r of rows) {
     if (r.shift_id !== shiftId) continue;
     const op = r.op;
-    if (op.kind !== 'handover' && out[r.crew_id]) out[r.crew_id].push([r.start, r.finish]);
+    if (op.kind !== 'handover' && out[r.crew_id]) out[r.crew_id].push([r.start, r.finish, r.demand]);
     if (op.kind === 'handover') {
       const mid = r.start + r.move_time / 2;
-      if (out[r.crew_id]) out[r.crew_id].push([r.start, mid]);
-      if (out[op.handover_crew]) out[op.handover_crew].push([mid, r.finish]);
+      if (out[r.crew_id]) out[r.crew_id].push([r.start, mid, r.demand]);
+      if (out[op.handover_crew]) out[op.handover_crew].push([mid, r.finish, r.demand]);
     }
   }
   return out;
 };
-CE.crewFreeAfter = function (intervals, cid, demand, earliest, members) {
-  let t = earliest;
-  const ivs = (intervals[cid] || []).slice().sort((a, b) => a[0] - b[0]);
-  for (let k = 0; k < 64; k++) {
-    const used = ivs.filter(([a, b]) => a <= t + 1e-9 && t < b).length;
-    if (members - used >= demand) return t;
-    const ends = ivs.filter(([a, b]) => a <= t + 1e-9 && t < b).map(([, b]) => b);
-    const nxt = ends.length ? Math.min(...ends) : null;
-    if (nxt === null || nxt <= t + 1e-9) return t;
-    t = nxt;
+// t 时刻正在进行的各区间 demand 之和（区间端点相接不算重叠）
+CE.activeDemand = function (ivs, t) {
+  return ivs.reduce((sum, [a, b, d]) => (a <= t + 1e-9 && t < b ? sum + d : sum), 0);
+};
+CE.crewFreeAfter = function (intervals, cid, demand, earliest, members, duration, winStart) {
+  duration = duration || 0;
+  winStart = winStart || 0;
+  let t = Math.max(+earliest, +winStart);
+  const ivs = intervals[cid] || [];
+  for (let k = 0; k < 256; k++) {
+    // 1) t 当前点：正在进行的占用 demand 之和必须留得下 demand
+    const active = ivs.filter(([a, b]) => a <= t + 1e-9 && t < b);
+    if (members - CE.activeDemand(ivs, t) < demand) {
+      const ends = active.map(([, b]) => b);
+      if (ends.length && Math.min(...ends) > t + 1e-9) { t = Math.min(...ends); continue; }
+      return t;
+    }
+    // 2) 未来窗口 (t, t+duration]：按区间开始事件扫描容量，
+    //    首次超限时让到该时刻正在进行区间的最早结束点（可能插入中间空隙），再重检。
+    if (duration > 1e-9) {
+      const f = t + duration;
+      const starts = [...new Set(ivs.map(([a]) => a))]
+        .filter((a) => t + 1e-9 < a && a < f - 1e-9).sort((a, b) => a - b);
+      let blockEnd = null;
+      for (const e of starts) {
+        if (members - CE.activeDemand(ivs, e) < demand) {
+          const ends = ivs.filter(([a, b]) => a <= e + 1e-9 && e < b).map(([, b]) => b);
+          if (ends.length) blockEnd = Math.min(...ends);
+          break;
+        }
+      }
+      if (blockEnd !== null && blockEnd > t + 1e-9) { t = blockEnd; continue; }
+    }
+    return t;
   }
   return t;
 };
@@ -317,21 +341,27 @@ CE.scheduleShift = function (idx, shift, opsIn, depSet) {
     if (blocked) { unscheduled.add(opId); continue; }
     if (!crew) { schedules[opId] = makeRow(op, earliest, false); continue; }
     let s;
+    const win0 = +(crew.win_start ?? 0);
     if (op.kind === 'handover' && idx.crews[op.handover_crew]) {
       const hcrew = idx.crews[op.handover_crew];
       const half = durations[op.id] <= 0 ? 0 : Math.max(1e-9, durations[op.id] - HANDOVER_PAUSE) / 2;
-      s = earliest;
+      const win0h = +(hcrew.win_start ?? 0);
+      s = Math.max(earliest, win0);
       for (let k = 0; k < 48; k++) {
-        const sa = CE.crewFreeAfter(intervals, op.crew_id, demands[opId], s, +crew.members);
+        const sa = CE.crewFreeAfter(intervals, op.crew_id, demands[opId], s, +crew.members, half, win0);
         const wantB = sa + half + (durations[op.id] > 0 ? HANDOVER_PAUSE : 0);
-        const sb = CE.crewFreeAfter(intervals, op.handover_crew, demands[opId], wantB, +hcrew.members);
+        const sb = CE.crewFreeAfter(intervals, op.handover_crew, demands[opId], wantB, +hcrew.members, half, win0h);
         if (Math.abs(sb - wantB) < 1e-9) { s = sa; break; }
         const cand = sb - half - HANDOVER_PAUSE;
         if (cand < earliest) { s = sa; break; }
         s = cand;
       }
+    } else if (op.kind === 'handover') {
+      s = CE.crewFreeAfter(intervals, op.crew_id, demands[opId], earliest, +crew.members,
+        durations[op.id], win0);
     } else {
-      s = CE.crewFreeAfter(intervals, op.crew_id, demands[opId], earliest, +crew.members);
+      s = CE.crewFreeAfter(intervals, op.crew_id, demands[opId], earliest, +crew.members,
+        durations[op.id], win0);
     }
     schedules[opId] = makeRow(op, s, false);
     intervals = CE.crewIntervals(idx, shift.id, Object.values(schedules));
@@ -889,8 +919,10 @@ canvas.addEventListener('pointerdown', (e) => {
     const g = hitTest(wx, wy);
     if (g && g.kind === 'gate') { CO.sel = g; }
     else {
+      // 空白处新建：吸附到最近的台边（返回 {x,y}）
+      const edge = clampStage(wx, wy, true);
       const ng = { id: uid('g'), stage_id: doc.stage.id, name: '台口 ' + ((doc.gates || []).length + 1),
-        x: +wx.toFixed(2), y: +clampStage(wx, wy).y.toFixed(2), position: (doc.gates || []).length };
+        x: +edge.x.toFixed(2), y: +edge.y.toFixed(2), position: (doc.gates || []).length };
       doc.gates.push(ng); CO.sel = { kind: 'gate', id: ng.id };
       commit();
     }
@@ -982,9 +1014,10 @@ canvas.addEventListener('dblclick', (e) => {
 function clampStage(x, y, gateEdge) {
   const W = +doc.stage.width, H = +doc.stage.height;
   if (gateEdge) {
-    // 出入口吸附到最近的台边
-    const edges = [[x, 0], [x, H], [0, y], [W, y]];
-    return edges.reduce((a, b) => Math.hypot(a[0] - x, a[1] - y) <= Math.hypot(b[0] - x, b[1] - y) ? a : b);
+    // 出入口吸附到最近的台边，返回 {x, y}（供新建与拖动用）
+    const edges = [{ x, y: 0 }, { x, y: H }, { x: 0, y }, { x: W, y }];
+    return edges.reduce((a, b) =>
+      Math.hypot(a.x - x, a.y - y) <= Math.hypot(b.x - x, b.y - y) ? a : b);
   }
   return [Math.max(0.05, Math.min(W - 0.05, x)), Math.max(0.05, Math.min(H - 0.05, y))];
 };
