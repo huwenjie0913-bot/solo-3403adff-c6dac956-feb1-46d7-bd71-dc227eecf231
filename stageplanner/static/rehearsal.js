@@ -307,8 +307,11 @@ function setMode(next) {
   r$('#reviewView').classList.toggle('hidden', next !== 'review');
   const coView = document.getElementById('changeoverView');
   if (coView) coView.classList.toggle('hidden', next !== 'changeover');
+  const sgView = document.getElementById('sightView');
+  if (sgView) sgView.classList.toggle('hidden', next !== 'sight');
   document.querySelectorAll('.plan-only').forEach((el) => el.classList.toggle('hidden', next !== 'plan'));
   document.querySelectorAll('.co-only').forEach((el) => el.classList.toggle('hidden', next !== 'changeover'));
+  document.querySelectorAll('.sight-only').forEach((el) => el.classList.toggle('hidden', next !== 'sight'));
   r$('#printReviewBtn').classList.toggle('hidden', next !== 'review');
   if (next === 'plan') {
     window.dispatchEvent(new Event('resize'));

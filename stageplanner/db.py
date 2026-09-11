@@ -176,10 +176,60 @@ CREATE TABLE IF NOT EXISTS shift_deps (
     depends_on    TEXT NOT NULL REFERENCES shift_ops(id) ON DELETE CASCADE,
     UNIQUE(op_id, depends_on)
 );
+-- ============================================================ 观众视线校核
+-- 观众区：舞台前方多边形 + 排数/座位间距/眼高/抽样密度
+CREATE TABLE IF NOT EXISTS audience_zones (
+    id            TEXT PRIMARY KEY,
+    stage_id      TEXT NOT NULL REFERENCES stages(id) ON DELETE CASCADE,
+    name          TEXT NOT NULL,
+    points        TEXT NOT NULL,                  -- JSON [[x,y],...] 多边形
+    rows          INTEGER NOT NULL DEFAULT 3,     -- 排数
+    seat_spacing  REAL NOT NULL DEFAULT 0.55,     -- 座位间距（米）
+    eye_height    REAL NOT NULL DEFAULT 1.2,      -- 眼高（米）
+    sample_step   INTEGER NOT NULL DEFAULT 1,     -- 抽样密度：每 N 座取 1 座
+    color         TEXT NOT NULL DEFAULT '#2fafb0',
+    position      INTEGER NOT NULL DEFAULT 0
+);
+-- 舞台焦点（可作为视线目标，自带高度）
+CREATE TABLE IF NOT EXISTS focus_points (
+    id          TEXT PRIMARY KEY,
+    stage_id    TEXT NOT NULL REFERENCES stages(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    x           REAL NOT NULL,
+    y           REAL NOT NULL,
+    height      REAL NOT NULL DEFAULT 1.0,        -- 焦点目标高度（米）
+    color       TEXT NOT NULL DEFAULT '#d4a23a',
+    position    INTEGER NOT NULL DEFAULT 0
+);
+-- 节点视线目标：kind=actor（该节点走位位置）| focus（舞台焦点）
+CREATE TABLE IF NOT EXISTS sight_targets (
+    id          TEXT PRIMARY KEY,
+    stage_id    TEXT NOT NULL REFERENCES stages(id) ON DELETE CASCADE,
+    beat_id     TEXT NOT NULL REFERENCES beats(id) ON DELETE CASCADE,
+    kind        TEXT NOT NULL,
+    ref_id      TEXT NOT NULL,
+    position    INTEGER NOT NULL DEFAULT 0
+);
+-- 校核结果版本（整份分析 JSON 快照，可跨版本比较）
+CREATE TABLE IF NOT EXISTS sight_checks (
+    id          TEXT PRIMARY KEY,
+    stage_id    TEXT NOT NULL REFERENCES stages(id) ON DELETE CASCADE,
+    name        TEXT NOT NULL,
+    results     TEXT NOT NULL,                    -- JSON analyze_sightlines 输出
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
+# 旧库补充高度列（regions/actors/props 的遮挡高度）
+MIGRATIONS = [
+    ("regions", "height", "ALTER TABLE regions ADD COLUMN height REAL NOT NULL DEFAULT 0"),
+    ("actors", "height", "ALTER TABLE actors ADD COLUMN height REAL NOT NULL DEFAULT 1.7"),
+    ("props", "height", "ALTER TABLE props ADD COLUMN height REAL NOT NULL DEFAULT 2.0"),
+]
+
 TABLES = ["shift_deps", "shift_ops", "shifts", "set_positions", "gates",
-          "props", "crews", "paths", "placements", "beats", "scenes",
+          "props", "crews", "paths", "placements", "sight_targets",
+          "focus_points", "audience_zones", "beats", "scenes",
           "actors", "regions", "stages"]
 
 
@@ -207,6 +257,11 @@ def init_db(path=None):
     conn = get_conn()
     try:
         conn.executescript(SCHEMA)
+        # 旧库迁移：缺列则补（CREATE TABLE IF NOT EXISTS 不会更新既有表）
+        for table, column, sql in MIGRATIONS:
+            cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+            if column not in cols:
+                conn.execute(sql)
         conn.commit()
     finally:
         conn.close()
@@ -257,6 +312,15 @@ def get_stage(stage_id):
                 "SELECT * FROM shift_ops WHERE stage_id=? ORDER BY position, rowid", (stage_id,))],
             "shift_deps": [dict(r) for r in conn.execute(
                 "SELECT * FROM shift_deps WHERE stage_id=? ORDER BY rowid", (stage_id,))],
+            "audience_zones": [dict(r) for r in conn.execute(
+                "SELECT * FROM audience_zones WHERE stage_id=? ORDER BY position, rowid",
+                (stage_id,))],
+            "focus_points": [dict(r) for r in conn.execute(
+                "SELECT * FROM focus_points WHERE stage_id=? ORDER BY position, rowid",
+                (stage_id,))],
+            "sight_targets": [dict(r) for r in conn.execute(
+                "SELECT * FROM sight_targets WHERE stage_id=? ORDER BY position, rowid",
+                (stage_id,))],
         }
         return doc
     finally:
@@ -268,22 +332,26 @@ def _core_specs(doc, sid):
     import json
     return [
         ("regions", doc.get("regions", []),
-         """INSERT INTO regions(id, stage_id, name, kind, points, color)
-            VALUES(?,?,?,?,?,?)
+         """INSERT INTO regions(id, stage_id, name, kind, points, color, height)
+            VALUES(?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
               name=excluded.name, kind=excluded.kind,
               points=excluded.points, color=excluded.color,
+              height=excluded.height,
               stage_id=excluded.stage_id""",
          lambda r: (r["id"], sid, r["name"], r.get("kind", "area"),
-                    json.dumps(r["points"]), r.get("color", "#8ab4f8"))),
+                    json.dumps(r["points"]), r.get("color", "#8ab4f8"),
+                    float(r.get("height") or 0))),
         ("actors", doc.get("actors", []),
-         """INSERT INTO actors(id, stage_id, name, speed, color)
-            VALUES(?,?,?,?,?)
+         """INSERT INTO actors(id, stage_id, name, speed, color, height)
+            VALUES(?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
               name=excluded.name, speed=excluded.speed,
-              color=excluded.color, stage_id=excluded.stage_id""",
+              color=excluded.color, height=excluded.height,
+              stage_id=excluded.stage_id""",
          lambda r: (r["id"], sid, r["name"], float(r["speed"]),
-                    r.get("color", "#e8734a"))),
+                    r.get("color", "#e8734a"),
+                    float(r.get("height") or 1.7))),
         ("scenes", doc.get("scenes", []),
          """INSERT INTO scenes(id, stage_id, name, position)
             VALUES(?,?,?,?)
@@ -338,17 +406,19 @@ def _extra_specs(doc, sid):
                     r.get("color", "#3f8fdd"), int(r.get("position", 0)))),
         ("props", doc.get("props", []),
          """INSERT INTO props(id, stage_id, name, w, h, weight, min_crew, speed,
-              storage, gates, color, position)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+              storage, gates, color, position, height)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET name=excluded.name, w=excluded.w, h=excluded.h,
               weight=excluded.weight, min_crew=excluded.min_crew, speed=excluded.speed,
               storage=excluded.storage, gates=excluded.gates, color=excluded.color,
-              position=excluded.position, stage_id=excluded.stage_id""",
+              position=excluded.position, height=excluded.height,
+              stage_id=excluded.stage_id""",
          lambda r: (r["id"], sid, r["name"], float(r["w"]), float(r["h"]),
                     float(r.get("weight", 0)), int(r["min_crew"]),
                     float(r["speed"]), r.get("storage", ""),
                     json.dumps(r.get("gates", [])),
-                    r.get("color", "#c98a3a"), int(r.get("position", 0)))),
+                    r.get("color", "#c98a3a"), int(r.get("position", 0)),
+                    float(r.get("height") or 2.0))),
         ("gates", doc.get("gates", []),
          """INSERT INTO gates(id, stage_id, name, x, y, position)
             VALUES(?,?,?,?,?,?)
@@ -401,6 +471,45 @@ def _extra_specs(doc, sid):
     ]
 
 
+def _sight_specs(doc, sid):
+    """观众视线校核子表 upsert spec（观众区/舞台焦点/节点视线目标）。"""
+    import json
+    return [
+        ("audience_zones", doc.get("audience_zones", []),
+         """INSERT INTO audience_zones(id, stage_id, name, points, rows, seat_spacing,
+              eye_height, sample_step, color, position)
+            VALUES(?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET name=excluded.name, points=excluded.points,
+              rows=excluded.rows, seat_spacing=excluded.seat_spacing,
+              eye_height=excluded.eye_height, sample_step=excluded.sample_step,
+              color=excluded.color, position=excluded.position,
+              stage_id=excluded.stage_id""",
+         lambda r: (r["id"], sid, r["name"], json.dumps(r["points"]),
+                    max(1, int(r.get("rows") or 1)),
+                    max(0.2, float(r.get("seat_spacing") or 0.55)),
+                    float(r.get("eye_height") or 1.2),
+                    max(1, int(r.get("sample_step") or 1)),
+                    r.get("color", "#2fafb0"), int(r.get("position", 0)))),
+        ("focus_points", doc.get("focus_points", []),
+         """INSERT INTO focus_points(id, stage_id, name, x, y, height, color, position)
+            VALUES(?,?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET name=excluded.name, x=excluded.x, y=excluded.y,
+              height=excluded.height, color=excluded.color, position=excluded.position,
+              stage_id=excluded.stage_id""",
+         lambda r: (r["id"], sid, r["name"], float(r["x"]), float(r["y"]),
+                    float(r.get("height") or 1.0),
+                    r.get("color", "#d4a23a"), int(r.get("position", 0)))),
+        ("sight_targets", doc.get("sight_targets", []),
+         """INSERT INTO sight_targets(id, stage_id, beat_id, kind, ref_id, position)
+            VALUES(?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET beat_id=excluded.beat_id, kind=excluded.kind,
+              ref_id=excluded.ref_id, position=excluded.position,
+              stage_id=excluded.stage_id""",
+         lambda r: (r["id"], sid, r["beat_id"], r["kind"], r["ref_id"],
+                    int(r.get("position", 0)))),
+    ]
+
+
 def save_document(doc):
     """整文档 upsert。doc 结构与 get_stage 输出一致（stage 含 id/name/width/height）。"""
     st = doc["stage"]
@@ -416,10 +525,11 @@ def save_document(doc):
                      height=excluded.height, updated_at=datetime('now')""",
                 (sid, st["name"], float(st["width"]), float(st["height"])),
             )
-            # 核心表（无换景表外键依赖），先插；换景表在其后
+            # 核心表（无换景表外键依赖），先插；换景表在其后；视线校核表最后
             core_specs = _core_specs(doc, sid)
             extra_specs = _extra_specs(doc, sid)
-            ordered = core_specs + extra_specs
+            sight_specs = _sight_specs(doc, sid)
+            ordered = core_specs + extra_specs + sight_specs
             # 删除顺序与插入顺序一致（extra 内部已按 deps->ops->shift 反依赖排列）
             for table, rows, _sql, _make in ordered:
                 ids = {r["id"] for r in rows}
@@ -539,6 +649,56 @@ def delete_rehearsal(rehearsal_id):
     try:
         with transaction(conn):
             cur = conn.execute("DELETE FROM rehearsals WHERE id=?", (rehearsal_id,))
+        return cur.rowcount > 0
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------- 视线校核版本
+def insert_sight_check(rec):
+    """保存一个校核版本：{id, stage_id, name, results(dict)}。"""
+    import json
+    conn = get_conn()
+    try:
+        with transaction(conn):
+            conn.execute(
+                """INSERT INTO sight_checks(id, stage_id, name, results)
+                   VALUES(?,?,?,?)""",
+                (rec["id"], rec["stage_id"], rec["name"],
+                 json.dumps(rec["results"], ensure_ascii=False)),
+            )
+        return get_sight_check(rec["id"])
+    finally:
+        conn.close()
+
+
+def list_sight_checks(stage_id):
+    conn = get_conn()
+    try:
+        rows = conn.execute(
+            """SELECT id, stage_id, name, results, created_at
+               FROM sight_checks WHERE stage_id=? ORDER BY created_at DESC, rowid DESC""",
+            (stage_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+    finally:
+        conn.close()
+
+
+def get_sight_check(check_id):
+    conn = get_conn()
+    try:
+        r = conn.execute("SELECT * FROM sight_checks WHERE id=?", (check_id,)).fetchone()
+        return dict(r) if r else None
+    finally:
+        conn.close()
+
+
+def delete_sight_check(check_id):
+    conn = get_conn()
+    try:
+        with transaction(conn):
+            cur = conn.execute("DELETE FROM sight_checks WHERE id=?", (check_id,))
         return cur.rowcount > 0
     finally:
         conn.close()

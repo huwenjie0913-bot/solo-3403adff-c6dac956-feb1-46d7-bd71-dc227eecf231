@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>观众视线校核报告 - {{ d.stage.name }}</title>
+<style>
+  @page { size: A4 landscape; margin: 9mm; }
+  body { font-family: "PingFang SC", "Microsoft YaHei", sans-serif; color: #222; font-size: 11px; }
+  h1 { font-size: 19px; margin: 0 0 2px; }
+  h2 { font-size: 15px; margin: 16px 0 6px; padding: 4px 8px; background: #e8f4f2; border-left: 4px solid #2fafb0; page-break-after: avoid; }
+  .sub { color: #666; margin-bottom: 8px; }
+  .toolbar { margin-bottom: 8px; }
+  .toolbar button { padding: 6px 16px; font-size: 13px; cursor: pointer; }
+  @media print { .toolbar { display: none; } body { font-size: 10px; } .sheet { page-break-after: always; } }
+
+  .meta { display: flex; gap: 18px; flex-wrap: wrap; margin: 4px 0 8px; color: #444; }
+  .meta b { color: #222; }
+  .sheet { margin-bottom: 14px; }
+  .content { display: flex; gap: 14px; align-items: flex-start; }
+  .seatmap { flex: 0 0 430px; }
+  .zones { flex: 1; }
+  svg { display: block; border: 1px solid #ccd6e0; background: #fbf7ee; }
+  .legend { font-size: 10px; color: #555; margin-top: 3px; display: flex; gap: 12px; flex-wrap: wrap; }
+  .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 3px; vertical-align: -1px; }
+
+  .zoneblock { margin-bottom: 10px; page-break-inside: avoid; border: 1px solid #c8d2dc; border-radius: 5px; padding: 6px 10px; }
+  .zonehead { display: flex; align-items: baseline; gap: 10px; margin-bottom: 4px; }
+  .zonehead .nm { font-size: 13px; font-weight: 700; }
+  .zonehead .rate { font-size: 15px; font-weight: 800; }
+  .zonehead .det { color: #666; font-size: 10px; }
+  .ratebar { height: 7px; border-radius: 4px; background: #e8edf3; overflow: hidden; margin: 3px 0 6px; }
+  .ratebar i { display: block; height: 100%; }
+  table { border-collapse: collapse; width: 100%; font-size: 10px; }
+  th, td { border: 1px solid #d5dde6; padding: 3px 6px; text-align: left; }
+  th { background: #eef3f8; font-weight: 600; }
+  td.t, th.t { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tr.bad td { background: #fdeceb; }
+  .blind { color: #c63732; }
+  .okline { color: #2f7d5b; font-weight: 700; }
+  .srcs { margin: 4px 0 0; padding: 0; list-style: none; font-size: 10px; color: #444; }
+  .srcs li { padding: 1px 0; }
+  .tgt { display: inline-block; background: #fdf3d7; border: 1px solid #e0c878; border-radius: 8px; padding: 0 7px; margin: 0 4px 3px 0; font-size: 10px; }
+</style>
+</head>
+<body>
+{% set W = d.stage.width %}{% set H = d.stage.height %}
+{% set bx0 = bounds[0] %}{% set by0 = bounds[1] %}{% set bx1 = bounds[2] %}{% set by1 = bounds[3] %}
+{% set regions_by_id = {} %}
+{% for r in d.regions %}{% set _ = regions_by_id.update({r.id: r}) %}{% endfor %}
+{% set actors_by_id = {} %}
+{% for a in d.actors %}{% set _ = actors_by_id.update({a.id: a}) %}{% endfor %}
+{% set beats_by_id = {} %}
+{% for b in d.beats %}{% set _ = beats_by_id.update({b.id: b}) %}{% endfor %}
+
+<div class="toolbar"><button onclick="window.print()">打印 / 导出 PDF</button></div>
+<h1>观众视线校核报告 · {{ d.stage.name }}</h1>
+<div class="sub">{{ W }}m × {{ H }}m · {{ d.audience_zones | length }} 个观众区 ·
+  {{ analysis.checked_beats }} 个校核节点 · 抽样座位 {{ analysis.seat_count }} 个</div>
+
+{% macro pct(v) %}{{ '%.1f'|format(v * 100) }}%{% endmacro %}
+
+{% macro seat_map(beat) %}
+{% set sw = 430 %}{% set sc = sw / (bx1 - bx0) %}{% set sh = (by1 - by0) * sc %}
+<svg width="{{ sw }}" height="{{ sh }}" viewBox="{{ bx0 }} {{ by0 }} {{ bx1 - bx0 }} {{ by1 - by0 }}">
+  <defs>
+    <pattern id="hatch" patternUnits="userSpaceOnUse" width="0.25" height="0.25" patternTransform="rotate(45)">
+      <line x1="0" y1="0" x2="0" y2="0.25" stroke="rgba(181,56,52,.6)" stroke-width="0.03"/>
+    </pattern>
+  </defs>
+  <rect x="0" y="0" width="{{ W }}" height="{{ H }}" fill="#fbf7ee" stroke="#33414f" stroke-width="0.06"/>
+  {% for x in range(1, W | int) %}<line x1="{{ x }}" y1="0" x2="{{ x }}" y2="{{ H }}" stroke="#e7e0d2" stroke-width="0.015"/>{% endfor %}
+  {% for y in range(1, H | int) %}<line x1="0" y1="{{ y }}" x2="{{ W }}" y2="{{ y }}" stroke="#e7e0d2" stroke-width="0.015"/>{% endfor %}
+  {# 区域/障碍（高度>0 的标注重量） #}
+  {% for r in d.regions %}
+  <polygon points="{{ r.points | map('join', ',') | map('string') | join(' ') }}"
+    fill="{{ '#d9534f' if r.kind == 'obstacle' else r.color }}" fill-opacity="{{ '0.25' if r.kind == 'obstacle' else '0.15' }}"
+    stroke="{{ '#b53834' if r.kind == 'obstacle' else '#2f6fb3' }}" stroke-width="0.04"/>
+  {% if r.kind == 'obstacle' %}<polygon points="{{ r.points | map('join', ',') | map('string') | join(' ') }}" fill="url(#hatch)"/>{% endif %}
+  {% if (r.height or 0) > 0 %}
+  {% set rcx = r.points | map(attribute=0) | sum / r.points | length %}
+  {% set rcy = r.points | map(attribute=1) | sum / r.points | length %}
+  <text x="{{ rcx }}" y="{{ rcy }}" font-size="0.3" fill="#96322e" text-anchor="middle">{{ r.name }} h={{ '%.1f'|format(r.height) }}m</text>
+  {% endif %}
+  {% endfor %}
+  {# 观众区与座位 #}
+  {% for zn in beat.zones %}
+  {% set zone = d.audience_zones | selectattr('id', 'equalto', zn.zone_id) | first %}
+  {% if zone %}
+  <polygon points="{{ zone.points | map('join', ',') | map('string') | join(' ') }}"
+    fill="#2fafb0" fill-opacity="0.08" stroke="#2fafb0" stroke-width="0.04" stroke-dasharray="0.3 0.18"/>
+  {% endif %}
+  {% for s in zn.seats %}
+  <circle cx="{{ s.x }}" cy="{{ s.y }}" r="0.09" fill="{{ '#46a063' if s.ok else '#d9534f' }}"/>
+  {% endfor %}
+  {% if zone %}
+  {% set zcx = zone.points | map(attribute=0) | sum / zone.points | length %}
+  {% set zcy = zone.points | map(attribute=1) | sum / zone.points | length %}
+  <text x="{{ zcx }}" y="{{ zcy }}" font-size="0.32" fill="#1d7a72" text-anchor="middle">{{ zn.zone_name }} {{ pct(zn.visible_rate) }}</text>
+  {% endif %}
+  {% endfor %}
+  {# 本节点演员走位（遮挡来源之一） #}
+  {% for p in d.placements if p.beat_id == beat.beat_id %}
+  {% set a = actors_by_id.get(p.actor_id) %}
+  {% if a %}
+  <circle cx="{{ p.x }}" cy="{{ p.y }}" r="0.3" fill="{{ a.color }}" fill-opacity="0.85" stroke="#fff" stroke-width="0.05"/>
+  <text x="{{ p.x }}" y="{{ p.y - 0.45 }}" font-size="0.28" fill="#23303d" text-anchor="middle">{{ a.name }}</text>
+  {% endif %}
+  {% endfor %}
+  {# 视线目标（星标） #}
+  {% for t in beat.targets %}
+  <path d="M {{ t.x }} {{ t.y - 0.42 }} L {{ t.x + 0.12 }} {{ t.y - 0.12 }} L {{ t.x + 0.44 }} {{ t.y - 0.1 }} L {{ t.x + 0.18 }} {{ t.y + 0.06 }} L {{ t.x + 0.26 }} {{ t.y + 0.38 }} L {{ t.x }} {{ t.y + 0.18 }} L {{ t.x - 0.26 }} {{ t.y + 0.38 }} L {{ t.x - 0.18 }} {{ t.y + 0.06 }} L {{ t.x - 0.44 }} {{ t.y - 0.1 }} L {{ t.x - 0.12 }} {{ t.y - 0.12 }} Z"
+    fill="#f2c66d" stroke="#8a6d1f" stroke-width="0.05"/>
+  <text x="{{ t.x }}" y="{{ t.y + 0.66 }}" font-size="0.28" fill="#5a4a10" text-anchor="middle">🎯{{ t.name }}</text>
+  {% endfor %}
+  <text x="{{ W / 2 }}" y="{{ H + 0.4 }}" font-size="0.3" fill="#5a6b7c" text-anchor="middle">— 观众侧 —</text>
+</svg>
+<div class="legend">
+  <span><i style="background:#46a063"></i>可见座位</span>
+  <span><i style="background:#d9534f"></i>被挡座位</span>
+  <span>★=视线目标 · 圆点=演员 · 红斜线=障碍（h=遮挡高度）· 青虚线=观众区</span>
+</div>
+{% endmacro %}
+
+{% for beat in analysis.beats %}
+<section class="sheet">
+  <h2>🎬 {{ beat.beat_name }}
+    <span style="font-weight:400;font-size:11px;color:#666;">
+      {% if beat.scene_name %}场景「{{ beat.scene_name }}」 · {% endif %}
+      目标：{% for t in beat.targets %}<span class="tgt">{{ '👤' if t.kind == 'actor' else '★' }} {{ t.name }}（高 {{ '%.1f'|format(t.z) }}m）</span>{% endfor %}
+    </span>
+  </h2>
+  <div class="content">
+    <div class="seatmap">{{ seat_map(beat) }}</div>
+    <div class="zones">
+      {% for zn in beat.zones %}
+      <div class="zoneblock">
+        <div class="zonehead">
+          <span class="nm">{{ zn.zone_name }}</span>
+          <span class="rate" style="color:{{ '#2f7d5b' if zn.visible_rate >= 0.95 else ('#b07a1e' if zn.visible_rate >= 0.8 else '#c63732') }}">{{ pct(zn.visible_rate) }}</span>
+          <span class="det">可见率 · 抽样 {{ zn.total }} 座，被挡 {{ zn.blocked }} 座 · 眼高 {{ '%.1f'|format(zn.eye_height) }}m</span>
+        </div>
+        <div class="ratebar"><i style="width:{{ (zn.visible_rate * 100) | round(1) }}%;background:{{ '#46a063' if zn.visible_rate >= 0.95 else ('#e0a32e' if zn.visible_rate >= 0.8 else '#d9534f') }}"></i></div>
+        {% if zn.blocked %}
+        <table>
+          <thead><tr><th>排</th><th class="t">座位数</th><th class="t">被挡</th><th>连续盲区</th></tr></thead>
+          <tbody>
+          {% for row in zn.rows %}
+          <tr class="{{ 'bad' if row.blocked }}">
+            <td>第 {{ row.row }} 排</td>
+            <td class="t">{{ row.total }}</td>
+            <td class="t">{{ row.blocked or '' }}</td>
+            <td>{% for run in row.runs %}
+              <span class="blind">{{ run.c0 }}{{ ('–' ~ run.c1) if run.c1 != run.c0 else '' }} 号（{{ run.count }} 座，{{ run.occluder }}）</span>{{ '；' if not loop.last }}
+            {% endfor %}</td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+        <ul class="srcs">
+          {% for s in zn.sources %}
+          <li>遮挡来源：<b>{{ s.name }}</b>（{{ {'region': '区域/障碍', 'prop': '布景道具', 'actor': '演员'}.get(s.kind, s.kind) }}）— 影响 {{ s.seats }} 座</li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <div class="okline">✅ 本区全部抽样座位视线通畅</div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+{% else %}
+<p>尚未配置视线校核：请在「视线校核」标签页绘制观众区，并为场景节点指定要看清的演员或舞台焦点。</p>
+{% endfor %}
+</body>
+</html>

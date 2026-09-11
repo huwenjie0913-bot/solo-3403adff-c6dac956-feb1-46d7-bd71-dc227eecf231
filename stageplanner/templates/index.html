@@ -15,6 +15,7 @@
       <button type="button" data-mode="rehearse" class="mtab">排练实录</button>
       <button type="button" data-mode="review" class="mtab">复盘</button>
       <button type="button" data-mode="changeover" class="mtab">换景调度</button>
+      <button type="button" data-mode="sight" class="mtab">视线校核</button>
     </div>
     <select id="stageSelect" title="切换舞台"></select>
     <button id="newStageBtn" type="button">新建舞台</button>
@@ -28,6 +29,7 @@
     <button id="printOverviewBtn" type="button" class="plan-only">🖨 可打印总览</button>
     <button id="printReviewBtn" type="button" class="review-only hidden">🖨 复盘单</button>
     <button id="printChangeoverBtn" type="button" class="co-only hidden">🖨 换景单</button>
+    <button id="printSightBtn" type="button" class="sight-only hidden">🖨 视线报告</button>
     <button id="saveBtn" type="button" class="primary plan-only">保存</button>
     <span id="saveState"></span>
   </header>
@@ -363,10 +365,108 @@
       </aside>
     </div>
   </div>
+  <!-- ============================================================ 观众视线校核 -->
+  <div id="sightView" class="modeView hidden">
+    <div class="sg-main">
+      <aside class="sg-side">
+        <section class="panel">
+          <h3>观众区
+            <button type="button" id="sgAddZoneBtn" class="mini">+ 绘制观众区</button>
+          </h3>
+          <ul id="sgZoneList" class="sg-zonelist"></ul>
+          <div class="hint">在舞台前方（观众侧）绘制多边形观众区；选中后可设排数、座位间距、眼高与抽样密度。</div>
+        </section>
+        <section class="panel">
+          <h3>舞台焦点
+            <button type="button" id="sgAddFocusBtn" class="mini">+ 添加焦点</button>
+          </h3>
+          <ul id="sgFocusList" class="sg-focuslist"></ul>
+          <div class="hint">焦点是台上要看清的位置（如王座、讲台），可作为节点的视线目标。</div>
+        </section>
+        <section class="panel" id="sgInspectorPanel">
+          <h3>属性</h3>
+          <div id="sgInspector"><p class="muted">未选中任何对象</p></div>
+        </section>
+      </aside>
+
+      <main class="sg-center">
+        <div class="sg-toolbar">
+          <div class="sg-tools" id="sgTools">
+            <button type="button" data-stool="select" class="active">选择/拖动</button>
+            <button type="button" data-stool="zone">绘制观众区</button>
+            <button type="button" data-stool="focus">添加焦点</button>
+          </div>
+          <div class="sg-toolright">
+            <span id="sgToolHint" class="sg-toolhint">拖动演员/焦点/遮挡物可预览视线变化，确认后才改动编排。</span>
+            <button type="button" id="sgSaveBtn">保存</button>
+          </div>
+        </div>
+        <div id="sgCanvasWrap" class="sg-canvaswrap">
+          <canvas id="sgCanvas"></canvas>
+          <div class="sg-legend">
+            <span><i class="sg-lg-ok"></i>可见</span>
+            <span><i class="sg-lg-bad"></i>被挡</span>
+            <span><i class="sg-lg-tgt"></i>视线目标</span>
+            <span><i class="sg-lg-zone"></i>观众区</span>
+          </div>
+          <div class="sg-zoom">
+            <button type="button" id="sgZoomOut">－</button>
+            <button type="button" id="sgZoomIn">＋</button>
+            <button type="button" id="sgZoomFit">适应</button>
+          </div>
+          <div id="sgPreviewBar" class="sg-previewbar hidden">
+            <span>🔍 预览中：视线已按拖动更新，编排尚未改动</span>
+            <button type="button" id="sgApplyBtn" class="primary">✓ 应用更改</button>
+            <button type="button" id="sgDiscardBtn">✕ 放弃</button>
+          </div>
+          <div id="sgDrawBar" class="sg-drawbar hidden">
+            <span id="sgDrawInfo">点击画布添加观众区顶点</span>
+            <button type="button" id="sgDrawFinishBtn">完成 (Enter)</button>
+            <button type="button" id="sgDrawCancelBtn">取消 (Esc)</button>
+          </div>
+        </div>
+        <div class="sg-tip">点击座位查看其视线；点击右侧问题可同时定位座位、遮挡物与目标并叠加视线扇面；拖动演员/焦点/遮挡物仅作预览，「应用更改」后才写入编排。</div>
+      </main>
+
+      <aside class="sg-side sg-side-r">
+        <section class="panel">
+          <h3>节点与视线目标</h3>
+          <label>节点 <select id="sgBeatSelect"></select></label>
+          <div id="sgTargetBox" class="sg-targetbox"></div>
+        </section>
+        <section class="panel problems">
+          <h3>校核结果 <span id="sgProblemCount" class="badge">0</span></h3>
+          <div id="sgZoneSummary" class="sg-zonesummary"></div>
+          <ul id="sgProblemList"></ul>
+        </section>
+        <section class="panel">
+          <h3>版本与比较</h3>
+          <div class="sg-verrow">
+            <input id="sgVerName" type="text" placeholder="版本名（默认：校核+时间）">
+            <button type="button" id="sgSaveVerBtn" class="mini" title="把当前校核结果存为版本">💾 存版本</button>
+          </div>
+          <ul id="sgVersionList" class="sg-verlist"></ul>
+          <div class="grid2">
+            <label>比较 A <select id="sgCmpA"></select></label>
+            <label>比较 B <select id="sgCmpB"></select></label>
+          </div>
+          <button type="button" id="sgCmpBtn" class="wide">比较两个版本</button>
+          <div id="sgCmpResult" class="sg-cmpresult"></div>
+          <h3 style="margin-top:10px">节点比较（当前编排）</h3>
+          <div class="grid2">
+            <label>节点 A <select id="sgBeatCmpA"></select></label>
+            <label>节点 B <select id="sgBeatCmpB"></select></label>
+          </div>
+          <div id="sgBeatCmpResult" class="sg-cmpresult"></div>
+        </section>
+      </aside>
+    </div>
+  </div>
 </div>
 <script>window.INITIAL_STAGE_ID = {{ (current.id if current else '')|tojson }};</script>
 <script src="{{ url_for('static', filename='app.js') }}"></script>
 <script src="{{ url_for('static', filename='rehearsal.js') }}"></script>
 <script src="{{ url_for('static', filename='changeover.js') }}"></script>
+<script src="{{ url_for('static', filename='sight.js') }}"></script>
 </body>
 </html>

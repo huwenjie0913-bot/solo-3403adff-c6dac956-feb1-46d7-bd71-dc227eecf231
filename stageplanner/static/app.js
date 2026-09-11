@@ -1120,11 +1120,13 @@ function renderInspector() {
       <label>类型
         <select id="inspRKind"><option value="area">普通区域</option><option value="obstacle"${r.kind === 'obstacle' ? ' selected' : ''}>障碍（不可穿越）</option></select>
       </label>
+      <label>遮挡高度 (m)（视线校核用，0=不遮挡） <input type="number" id="inspRHeight" step="0.1" min="0" value="${r.height || 0}"></label>
       <label>颜色 <input type="color" id="inspRColor" value="${r.kind === 'obstacle' ? '#d9534f' : r.color}"></label>
       <p class="muted">在画布上拖动顶点可调整形状（至少 3 个顶点）。</p>
       <button class="act" id="inspRDel">删除区域</button>`;
     $('#inspRName').addEventListener('change', (e) => { r.name = e.target.value || r.name; commit(); });
     $('#inspRKind').addEventListener('change', (e) => { r.kind = e.target.value; commit(); });
+    $('#inspRHeight').addEventListener('change', (e) => { r.height = Math.max(0, parseFloat(e.target.value) || 0); commit(); });
     $('#inspRColor').addEventListener('change', (e) => { r.color = e.target.value; commit(); });
     $('#inspRDel').addEventListener('click', () => deleteRegion(r.id));
   } else if (s.kind === 'beat') {
@@ -1147,10 +1149,12 @@ function renderInspector() {
     box.innerHTML = `
       <label>姓名 <input type="text" id="inspAName" value="${escapeHtml(a.name)}"></label>
       <label>常用步速 (m/s) <input type="number" id="inspASpeed" step="0.05" min="0.1" value="${a.speed}"></label>
+      <label>身高 (m)（视线校核用） <input type="number" id="inspAHeight" step="0.05" min="0.5" max="2.5" value="${a.height || 1.7}"></label>
       <label>颜色 <input type="color" id="inspAColor" value="${a.color}"></label>
       <button class="act" id="inspADel">删除演员（连同其全部走位）</button>`;
     $('#inspAName').addEventListener('change', (e) => { a.name = e.target.value || a.name; commit(); });
     $('#inspASpeed').addEventListener('change', (e) => { a.speed = clamp(parseFloat(e.target.value) || 1.2, 0.1, 10); commit(); });
+    $('#inspAHeight').addEventListener('change', (e) => { a.height = clamp(parseFloat(e.target.value) || 1.7, 0.5, 2.5); commit(); });
     $('#inspAColor').addEventListener('change', (e) => { a.color = e.target.value; commit(); });
     $('#inspADel').addEventListener('click', () => deleteActor(a.id));
   }

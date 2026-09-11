@@ -13,6 +13,9 @@ from .review import (
     build_review, build_review_print, compare_reviews, promote_to_document,
     snapshot_doc,
 )
+from .sightline import (
+    analyze_sightlines, compare_results, sight_map_bounds, summarize_results,
+)
 
 
 def create_app(db_path=None, testing=False):
@@ -62,6 +65,7 @@ def create_app(db_path=None, testing=False):
             "beats": [], "placements": [], "paths": [],
             "crews": [], "props": [], "gates": [], "set_positions": [],
             "shifts": [], "shift_ops": [], "shift_deps": [],
+            "audience_zones": [], "focus_points": [], "sight_targets": [],
         }
         saved = db.save_document(doc)
         return jsonify(_serialize(saved)), 201
@@ -118,6 +122,93 @@ def create_app(db_path=None, testing=False):
         payload = _serialize(doc)
         cp = build_changeover_print(payload)
         return render_template("print_changeover.html", d=payload, cp=cp)
+
+    # ----------------------------------------------------- 观众视线校核
+    @app.get("/api/stages/<stage_id>/sightlines")
+    def stage_sightlines(stage_id):
+        doc = db.get_stage(stage_id)
+        if doc is None:
+            return jsonify(error="舞台不存在"), 404
+        return jsonify(analyze_sightlines(_serialize(doc)))
+
+    @app.get("/api/stages/<stage_id>/sight_checks")
+    def list_sight_checks_api(stage_id):
+        if db.get_stage(stage_id) is None:
+            return jsonify(error="舞台不存在"), 404
+        out = []
+        for rec in db.list_sight_checks(stage_id):
+            results = json.loads(rec["results"])
+            out.append({"id": rec["id"], "name": rec["name"],
+                        "created_at": rec["created_at"],
+                        "summary": summarize_results(results)})
+        return jsonify(out)
+
+    @app.post("/api/stages/<stage_id>/sight_checks")
+    def create_sight_check(stage_id):
+        doc = db.get_stage(stage_id)
+        if doc is None:
+            return jsonify(error="舞台不存在"), 404
+        data = request.get_json(force=True) or {}
+        results = analyze_sightlines(_serialize(doc))
+        name = (data.get("name") or "").strip()[:80]
+        if not name:
+            from datetime import datetime
+            name = "校核 " + datetime.now().strftime("%m-%d %H:%M")
+        rec = db.insert_sight_check({
+            "id": uuid.uuid4().hex, "stage_id": stage_id,
+            "name": name, "results": results,
+        })
+        return jsonify(_sight_check_json(rec)), 201
+
+    @app.get("/api/sight_checks/<check_id>")
+    def get_sight_check_api(check_id):
+        rec = db.get_sight_check(check_id)
+        if rec is None:
+            return jsonify(error="校核版本不存在"), 404
+        return jsonify(_sight_check_json(rec))
+
+    @app.delete("/api/sight_checks/<check_id>")
+    def delete_sight_check_api(check_id):
+        if not db.delete_sight_check(check_id):
+            return jsonify(error="校核版本不存在"), 404
+        return jsonify(ok=True)
+
+    @app.get("/api/stages/<stage_id>/sight_checks/compare")
+    def sight_checks_compare(stage_id):
+        """比较两个校核结果；a/b 为版本 id 或 current（当前文档即时计算）。"""
+        doc = db.get_stage(stage_id)
+        if doc is None:
+            return jsonify(error="舞台不存在"), 404
+
+        def load(which):
+            if which == "current":
+                return {"id": "current", "name": "当前编排",
+                        "results": analyze_sightlines(_serialize(doc))}
+            rec = db.get_sight_check(which or "")
+            if rec is None or rec["stage_id"] != stage_id:
+                return None
+            return {"id": rec["id"], "name": rec["name"],
+                    "results": json.loads(rec["results"])}
+
+        a = load(request.args.get("a"))
+        b = load(request.args.get("b"))
+        if a is None or b is None:
+            return jsonify(error="待比较的校核版本不存在"), 404
+        cmp_ = compare_results(a["results"], b["results"])
+        cmp_["a"] = {"id": a["id"], "name": a["name"]}
+        cmp_["b"] = {"id": b["id"], "name": b["name"]}
+        return jsonify(cmp_)
+
+    @app.get("/print/stages/<stage_id>/sightlines")
+    def print_sightlines(stage_id):
+        doc = db.get_stage(stage_id)
+        if doc is None:
+            abort(404)
+        payload = _serialize(doc)
+        result = analyze_sightlines(payload)
+        return render_template("print_sightlines.html", d=payload,
+                               analysis=result,
+                               bounds=sight_map_bounds(payload))
 
     # ----------------------------------------------------- 排练实录 / 复盘
     @app.get("/api/stages/<stage_id>/rehearsals")
@@ -290,7 +381,17 @@ def _serialize(doc):
     out["paths"] = [{**p, "points": json.loads(p["points"])} for p in out["paths"]]
     out["props"] = [{**p, "gates": json.loads(p["gates"])} for p in out["props"]]
     out["shift_ops"] = [{**o, "route": json.loads(o["route"])} for o in out["shift_ops"]]
+    out["audience_zones"] = [
+        {**z, "points": json.loads(z["points"])} for z in out["audience_zones"]]
     return out
+
+
+def _sight_check_json(rec):
+    """校核版本序列化：results JSON 解析为对象。"""
+    return {"id": rec["id"], "stage_id": rec["stage_id"], "name": rec["name"],
+            "created_at": rec["created_at"],
+            "results": json.loads(rec["results"]) if isinstance(rec.get("results"), str)
+            else rec.get("results")}
 
 
 def _rehearsal_json(rec):
@@ -344,7 +445,8 @@ def _valid_document(data, stage_id):
         return False
     for key in ("regions", "actors", "scenes", "beats", "placements", "paths",
                 "crews", "props", "gates", "set_positions", "shifts",
-                "shift_ops", "shift_deps"):
+                "shift_ops", "shift_deps",
+                "audience_zones", "focus_points", "sight_targets"):
         if not isinstance(data.get(key, []), list):
             return False
     return True
