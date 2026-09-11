@@ -1073,7 +1073,7 @@ function addProp() {
   ensureArrays();
   const n = doc.props.length + 1;
   const p = { id: uid('pr'), stage_id: doc.stage.id, name: `布景 ${n}`, w: 1.2, h: 1.0,
-    weight: 20, min_crew: 2, speed: 0.8, storage: 'SL', gates: [],
+    weight: 20, min_crew: 2, speed: 0.8, storage: 'SL', gates: [], height: 2.0,
     color: PROP_COLORS[(doc.props.length) % PROP_COLORS.length], position: doc.props.length };
   doc.props.push(p);
   CO.sel = { kind: 'prop', id: p.id };
@@ -1304,12 +1304,15 @@ function renderInspector() {
       </div>
       <div class="grid2">
         ${field('移动速度(m/s)', `<input data-f="speed" type="number" min="0.05" step="0.05" value="${p.speed}">`)}
+        ${field('遮挡高度(m)', `<input data-f="height" type="number" min="0" step="0.1" value="${p.height ?? 2.0}" title="视线校核用，0=不遮挡">`)}
+      </div>
+      <div class="grid2">
         ${field('颜色', `<input data-f="color" type="color" value="${esc(p.color)}">`)}
       </div>
       ${field('存放侧台', `<select data-f="storage"><option value="SL" ${p.storage === 'SL' ? 'selected' : ''}>舞台左侧台 SL</option><option value="SR" ${p.storage === 'SR' ? 'selected' : ''}>舞台右侧台 SR</option></select>`)}
       <label>允许出入口</label><div class="gatebox">${gates}</div>
       <button class="act danger" data-act="del">删除物件（含位置与操作）</button>`;
-    bindInspector(p, ['name', 'w', 'h', 'weight', 'min_crew', 'speed', 'color', 'storage']);
+    bindInspector(p, ['name', 'w', 'h', 'weight', 'min_crew', 'speed', 'color', 'storage', 'height']);
     el.querySelectorAll('[data-gate]').forEach((cb) => cb.addEventListener('change', () => {
       p.gates = p.gates || [];
       const gid = cb.dataset.gate;

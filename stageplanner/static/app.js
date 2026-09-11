@@ -836,6 +836,9 @@ function rawDeleteActor(id) {
   doc.actors = doc.actors.filter((a) => a.id !== id);
   doc.placements = doc.placements.filter((p) => p.actor_id !== id);
   doc.paths = doc.paths.filter((p) => p.actor_id !== id);
+  if (Array.isArray(doc.sight_targets)) {
+    doc.sight_targets = doc.sight_targets.filter((t) => !(t.kind === 'actor' && t.ref_id === id));
+  }
 }
 
 // ---------------------------------------------------------------- 多边形绘制
@@ -854,6 +857,7 @@ function finishDrawing() {
     kind: drawing.kind,
     points: drawing.pts,
     color: colors[doc.regions.filter((r) => r.kind === drawing.kind).length % colors.length],
+    height: drawing.kind === 'obstacle' ? 2.0 : 0,   // 遮挡高度（视线校核用）
   };
   drawing = null;
   $('#drawBar').classList.add('hidden');
@@ -1209,6 +1213,7 @@ function deleteBeat(id) {
   doc.beats = doc.beats.filter((x) => x.id !== id);
   doc.placements = doc.placements.filter((p) => p.beat_id !== id);
   doc.paths = doc.paths.filter((p) => p.from_beat_id !== id && p.to_beat_id !== id);
+  if (Array.isArray(doc.sight_targets)) doc.sight_targets = doc.sight_targets.filter((t) => t.beat_id !== id);
   if (currentBeatId === id) currentBeatId = doc.beats[0]?.id || null;
   endInteraction();
 }
@@ -1218,6 +1223,7 @@ function deleteScene(id) {
   doc.beats = doc.beats.filter((b) => b.scene_id !== id);
   doc.placements = doc.placements.filter((p) => !beatIds.has(p.beat_id));
   doc.paths = doc.paths.filter((p) => !beatIds.has(p.from_beat_id) && !beatIds.has(p.to_beat_id));
+  if (Array.isArray(doc.sight_targets)) doc.sight_targets = doc.sight_targets.filter((t) => !beatIds.has(t.beat_id));
   doc.scenes = doc.scenes.filter((s) => s.id !== id);
   if (!doc.scenes.length) currentBeatId = null;
   endInteraction();
@@ -1546,7 +1552,8 @@ async function init() {
     afterLoad();
   } else {
     doc = { stage: { id: '', name: '请先新建舞台', width: 12, height: 8 },
-      regions: [], actors: [], scenes: [], beats: [], placements: [], paths: [] };
+      regions: [], actors: [], scenes: [], beats: [], placements: [], paths: [],
+      audience_zones: [], focus_points: [], sight_targets: [] };
     fitView(); resizeCanvas();
   }
   resizeCanvas();
